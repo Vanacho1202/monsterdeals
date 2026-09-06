@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: monsterdeals-backend
+    runtime: node
+    plan: free
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
