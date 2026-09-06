@@ -1,7 +1,10 @@
 *.iml
 .gradle/
+.kotlin/
 local.properties
 .idea/
 build/
 node_modules/
 .env
+api_key*
+*.apk
