@@ -56,25 +56,7 @@ class OffersViewModel(app: Application) : AndroidViewModel(app) {
                 val offers = if (useDemoData) {
                     repo.demoOffers(here.lat, here.lon)
                 } else {
-                    // TEST-EINTRAG (auf Wunsch, temporaer): REWE laesst sich
-                    // vom Server aus nicht erreichen (IP-Sperre), deshalb
-                    // hier eine echte, gerade manuell abgerufene REWE-
-                    // Angebotskarte zur Ansicht. TODO: nach dem Test wieder
-                    // entfernen.
-                    val real = repo.nearbyOffers(here.lat, here.lon, radiusKm)
-                    val reweTest = Offer(
-                        id = "test-rewe-cocacola",
-                        storeName = "REWE",
-                        storeAddress = "(Test-Eintrag, keine echte Filialadresse)",
-                        product = "Coca Cola (TEST)",
-                        price = 1.11,
-                        deposit = 0.0,
-                        regularPrice = null,
-                        validUntil = "",
-                        lat = here.lat,
-                        lon = here.lon
-                    )
-                    real + reweTest
+                    repo.nearbyOffers(here.lat, here.lon, radiusKm)
                 }
                 // Reine Preissortierung reisst Ketten mit mehreren Filialen
                 // auseinander: eine 1 Cent guenstigere, aber 70km entfernte
