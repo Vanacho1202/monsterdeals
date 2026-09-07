@@ -357,24 +357,6 @@ app.get("/offers", async (req, res) => {
       await new Promise((r) => setTimeout(r, 300)); // hoeflicher Abstand zwischen Anfragen
     }
 
-    // TEMPORAERER TEST-EINTRAG (auf Wunsch): REWE ist vom Server aus nicht
-    // erreichbar (IP-Sperre), deshalb hier eine echte, gerade manuell
-    // abgerufene REWE-Angebotskarte zur Ansicht in der App. Wieder
-    // entfernen, sobald der Test vorbei ist.
-    offers.push({
-      id: "test-rewe-cocacola",
-      storeName: "REWE",
-      product: "Coca Cola (TEST)",
-      price: 1.11,
-      deposit: 0,
-      regularPrice: null,
-      validUntil: "",
-      source: "manueller Testabruf",
-      storeAddress: "(Test-Eintrag, keine echte Filialadresse)",
-      lat,
-      lon
-    });
-
     cache.set(key, { time: Date.now(), offers });
     res.json(offers);
   } catch (e) {
