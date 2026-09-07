@@ -124,8 +124,9 @@ async function scrapeRewe(query) {
     }
     return out;
   } catch (e) {
-    // Browser koennte abgestuerzt/getrennt sein (RAM-Limit auf Gratis-Hosting)
-    if (!browser.isConnected()) browserPromise = null;
+    // Browser koennte abgestuerzt/getrennt sein (RAM-Limit auf Gratis-Hosting) -
+    // beim naechsten Versuch sicherheitshalber neu starten.
+    browserPromise = null;
     throw e;
   } finally {
     await page.close().catch(() => {});
