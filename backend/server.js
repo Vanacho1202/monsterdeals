@@ -12,27 +12,29 @@
  *  4. Ergebnis wird 6 Stunden gecacht
  *
  * Abdeckung / bekannte Einschraenkungen:
- *  - Aldi Nord, Trinkgut, Kaufland: funktionieren zuverlaessig.
- *  - REWE: NICHT eingebaut, nach ausfuehrlichem Test aufgegeben. node-fetch
- *    und Node's https-Modul bekommen 403 (TLS-Fingerprinting), curl kommt
- *    zwar technisch durch, liefert von einem Render-Server aus aber nur
- *    die generische Homepage statt der Angebotsseite - und zwar UNABHAENGIG
- *    von der Region (getestet: Oregon UND Frankfurt liefern identisch die
- *    Homepage). Das ist also keine Geo-Sperre, sondern eine IP-Bereich-
- *    Sperre gegen Render/Cloud-Hosting generell. Ein echter Fix (Proxy mit
- *    Residential-IP o.ae.) waere ein aktiver Bot-Erkennungs-Bypass und
- *    wurde deshalb bewusst nicht gebaut.
+ *  - Aldi Nord, Trinkgut, Kaufland: direkt von der jeweiligen Haendler-
+ *    Seite, funktionieren zuverlaessig.
+ *  - scrapeMeinprospekt(): zusaetzlich meinprospekt.de (Prospekt-
+ *    Aggregator), Ketten-uebergreifend - zeigt automatisch, welche Kette
+ *    diese Woche Monster Energy im Prospekt hat (z.B. Lidl, Penny, ggf.
+ *    auch REWE, EDEKA etc., je nachdem wer aktuell ein Angebot hat). Als
+ *    SEO-Seite ohne aggressiven Bot-Schutz, kein curl/Browser noetig.
+ *  - REWE/EDEKA/Aldi Sued/Netto DIREKT (auf deren eigener Seite) sind NICHT
+ *    eingebaut: liefern 403 (Bot-Schutz) bzw. bei REWE liefert selbst curl
+ *    von jedem getesteten Render-Standort (Oregon UND Frankfurt) nur die
+ *    generische Homepage statt der Angebotsseite - also eine IP-Bereich-
+ *    Sperre gegen Cloud-Hosting generell, keine Geo-Sperre. Ein echter Fix
+ *    (Proxy mit Residential-IP o.ae.) waere ein aktiver Bot-Erkennungs-
+ *    Bypass und wurde deshalb bewusst nicht gebaut. Diese Ketten koennen
+ *    aber trotzdem über scrapeMeinprospekt() auftauchen, sobald sie dort
+ *    ein Angebot haben.
  *    (Ein zuvor versuchter echter Headless-Chrome via puppeteer-core +
- *    @sparticuz/chromium haette das RAM-Problem noch draufgesetzt: hat auf
- *    Render's 512-MB-Gratis-Tier den ganzen Server mit Out-of-Memory
- *    abgeschossen.)
- *  - EDEKA, Aldi Sued, Netto (beide Varianten): liefern 403 auch mit curl.
- *  - Penny: Struktur vorhanden, aber kein bestaetigtes Beispiel gefunden,
- *    deshalb nicht eingebaut.
+ *    @sparticuz/chromium haette zusaetzlich Render's 512-MB-Gratis-Tier
+ *    mit Out-of-Memory abgeschossen.)
  *  - Alle Preise sind national/online-Prospekt-Daten, nicht filialscharf.
  *    Die Distanz bezieht sich auf die naechste per Photon gefundene
  *    Filiale der Kette, nicht auf den tatsaechlichen Angebotsort.
- *  - Bricht potenziell, wenn ein Haendler seine Website umbaut.
+ *  - Bricht potenziell, wenn eine Seite ihr Layout umbaut.
  */
 import express from "express";
 import fetch from "node-fetch";
@@ -197,7 +199,46 @@ async function scrapeAldiNord(query) {
   }).filter((o) => typeof o.price === "number");
 }
 
-const SCRAPERS = [scrapeTrinkgut, scrapeKaufland, scrapeAldiNord];
+/**
+ * Scraper: meinprospekt.de (Prospekt-Aggregator)
+ *
+ * Listet Monster-Energy-Angebote ketten-uebergreifend auf einer festen
+ * Seite - SEO-Seite, deshalb (anders als REWE/EDEKA/Netto direkt) kein
+ * aggressiver Bot-Schutz, kommt problemlos durch node-fetch. Deckt damit
+ * potenziell auch Ketten ab, die einzeln nicht erreichbar waren (REWE,
+ * Lidl, Penny, ...) - je nachdem, wer diese Woche im Prospekt ist.
+ */
+async function scrapeMeinprospekt(query) {
+  if (!query.toLowerCase().includes("monster")) return [];
+  const url = "https://www.meinprospekt.de/angebote/monster-energy";
+  const $ = cheerio.load(await fetchHtml(url));
+  const out = [];
+  // Jede Angebotskarte: <p>Haendler</p><p>Marke</p><p>Produktart</p>, dann
+  // Preis (.text-primary) und optional Streichpreis (.line-through).
+  $("#OfferGrid [role=\"listitem\"]").each((_, el) => {
+    const ps = $(el).find("p");
+    const storeName = $(ps.get(0)).text().trim();
+    const brand = $(ps.get(1)).text().trim();
+    const productType = $(ps.get(2)).text().trim();
+    const priceText = $(el).find(".text-primary").first().text().trim();
+    const price = parseFloat(priceText.replace(",", "."));
+    if (!storeName || Number.isNaN(price)) return;
+    const oldPriceText = $(el).find(".line-through").first().text().trim();
+    const regularPrice = oldPriceText ? parseFloat(oldPriceText.replace(",", ".")) : null;
+    out.push({
+      storeName,
+      product: [brand, productType].filter(Boolean).join(" ") || "Monster Energy",
+      price,
+      deposit: 0.25, // Standard-Einwegpfand, Seite gibt es nicht separat an
+      regularPrice: regularPrice != null && !Number.isNaN(regularPrice) ? regularPrice : null,
+      validUntil: "",
+      source: url
+    });
+  });
+  return out;
+}
+
+const SCRAPERS = [scrapeTrinkgut, scrapeKaufland, scrapeAldiNord, scrapeMeinprospekt];
 
 /* ---------- Endpunkt ---------- */
 app.get("/offers", async (req, res) => {
