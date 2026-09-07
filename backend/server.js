@@ -7,8 +7,9 @@
  *  1. Koordinaten -> Ort/PLZ per Photon (OSM-basiert, https://photon.komoot.io)
  *  2. Direktes Scraping der oeffentlichen Angebotsseiten einzelner Haendler
  *     (kein LLM, keine Kosten, kein API-Key) nach dem gesuchten Produkt
- *  3. Nächste Filiale je Treffer per Photon geokodieren, damit die App
- *     Entfernungen anzeigen kann
+ *  3. Bis zu 3 nächstgelegene Filialen je Treffer per Photon geokodieren
+ *     (geocodeStores), damit die App auch mehrere Filialen derselben
+ *     Kette in der Naehe anzeigen kann, nicht nur die naechste
  *  4. Ergebnis wird 6 Stunden gecacht
  *
  * Abdeckung / bekannte Einschraenkungen:
@@ -75,24 +76,49 @@ async function reverseGeocode(lat, lon) {
   };
 }
 
-async function geocodeStore(name, nearLat, nearLon) {
+/**
+ * Findet die naechsten Filialen einer Kette (nicht nur eine). Gibt bis zu
+ * maxResults Stueck zurueck, sortiert nach Entfernung, jede innerhalb von
+ * maxKm - damit z.B. "Penny" nicht nur eine, sondern mehrere Filialen in
+ * der Naehe zeigt, falls es dort mehrere gibt.
+ */
+async function geocodeStores(name, nearLat, nearLon, maxResults = 3, maxKm = 100) {
   // NUR den Kettennamen suchen, ohne Stadt im Suchtext: Photons Textsuche
   // kombiniert "Kette, kleiner Ort" oft schlecht (fand z.B. fuer "Lidl,
   // Amoeneburg" NICHTS, obwohl "Lidl" allein + lat/lon-Gewichtung sofort
   // mehrere echte Filialen in 10-25km Entfernung lieferte). lat/lon-
   // Gewichtung reicht fuer die Naehe-Sortierung voellig aus.
   const q = encodeURIComponent(name);
-  // Mehrere Kandidaten holen und auf Deutschland filtern, sonst kann eine
-  // seltene/falsch geschriebene Kette auf einen voellig anderen (sogar
-  // auslaendischen) Ort ausweichen.
-  const url = `https://photon.komoot.io/api/?q=${q}&limit=8&lat=${nearLat}&lon=${nearLon}`;
+  const url = `https://photon.komoot.io/api/?q=${q}&limit=15&lat=${nearLat}&lon=${nearLon}`;
   const r = await fetch(url, { headers: { "User-Agent": UA } });
   const j = await r.json();
-  const f = (j.features || []).find((feat) => feat.properties?.countrycode === "DE");
-  if (!f) return null;
-  const p = f.properties;
-  const address = [p.name, p.street, p.housenumber, p.postcode, p.city].filter(Boolean).join(", ");
-  return { lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0], address };
+  const candidates = (j.features || [])
+    .filter((feat) => feat.properties?.countrycode === "DE")
+    .map((f) => {
+      const p = f.properties;
+      const lat = f.geometry.coordinates[1];
+      const lon = f.geometry.coordinates[0];
+      return {
+        lat,
+        lon,
+        address: [p.name, p.street, p.housenumber, p.postcode, p.city].filter(Boolean).join(", "),
+        distanceKm: haversineKm(nearLat, nearLon, lat, lon)
+      };
+    })
+    .filter((c) => c.distanceKm <= maxKm)
+    .sort((a, b) => a.distanceKm - b.distanceKm);
+  // Duplikate vermeiden (Photon liefert manchmal dieselbe Filiale mehrfach
+  // mit minimal unterschiedlichen Koordinaten, z.B. Eingang vs. Gebaeude).
+  const seen = new Set();
+  const unique = [];
+  for (const c of candidates) {
+    const key = c.address;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(c);
+    if (unique.length >= maxResults) break;
+  }
+  return unique;
 }
 
 /* ---------- Scraper: Trinkgut (Shopware, .product-box) ---------- */
@@ -292,14 +318,12 @@ app.get("/offers", async (req, res) => {
 
     const offers = [];
     for (const [i, o] of raw.entries()) {
-      const geo = await geocodeStore(o.storeName, lat, lon);
-      if (!geo) continue;
-      // Photons Textsuche kann daneben liegen (z.B. eine Strasse, die nur
-      // zufaellig wie der Ortsname heisst, in einer ganz anderen Stadt).
-      // Ergebnisse weit weg vom gesuchten Standort verwerfen statt eine
-      // falsche "Filiale in der Naehe" vorzugaukeln.
-      if (haversineKm(lat, lon, geo.lat, geo.lon) > 100) continue;
-      offers.push({ id: `${key}-${i}`, ...o, storeAddress: geo.address, lat: geo.lat, lon: geo.lon });
+      // Bis zu 3 Filialen dieser Kette in der Naehe, nicht nur die naechste -
+      // Distanz-Filter (>100km) steckt schon in geocodeStores().
+      const branches = await geocodeStores(o.storeName, lat, lon, 3);
+      branches.forEach((geo, j) => {
+        offers.push({ id: `${key}-${i}-${j}`, ...o, storeAddress: geo.address, lat: geo.lat, lon: geo.lon });
+      });
       await new Promise((r) => setTimeout(r, 300)); // hoeflicher Abstand zwischen Anfragen
     }
 
