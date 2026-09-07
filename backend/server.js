@@ -15,12 +15,12 @@
  */
 import express from "express";
 import fetch from "node-fetch";
-import Anthropic from "@anthropic-ai/sdk";
+import { GoogleGenAI } from "@google/genai";
 
 const app = express();
 const PORT = process.env.PORT || 8080;
-const anthropic = new Anthropic(); // liest ANTHROPIC_API_KEY aus der Umgebung
-const UA = "MonsterDeals/1.0 (kontakt@example.com)"; // Nominatim verlangt eine Kennung
+const genai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const UA = "MonsterDeals/1.0 (kontakt@example.com)"; // Kennung fuer OSM-Dienste
 
 const cache = new Map();
 const CACHE_MS = 6 * 60 * 60 * 1000;
@@ -77,17 +77,15 @@ Jedes Element:
 Nur Angebote, die du wirklich belegen kannst. Keine Erfindungen.
 Wenn du nichts findest, antworte mit [].`;
 
-  const response = await anthropic.messages.create({
-    model: "claude-sonnet-5",
-    max_tokens: 2000,
-    messages: [{ role: "user", content: prompt }],
-    tools: [{ type: "web_search_20260209", name: "web_search" }]
+  const response = await genai.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: prompt,
+    config: {
+      tools: [{ type: "google_search" }]
+    }
   });
 
-  const text = response.content
-    .filter((b) => b.type === "text")
-    .map((b) => b.text)
-    .join("\n")
+  const text = response.text
     .replace(/```json|```/g, "")
     .trim();
 
