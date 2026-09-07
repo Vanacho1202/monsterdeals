@@ -1,9 +1,17 @@
+# Render Blueprint - https://render.com/docs/blueprint-spec
+# Diese Datei fehlte vermutlich bisher im Repo - das ist typischerweise der
+# Grund fuer "Failed sync" bei einem Render Blueprint (Monster).
 services:
   - type: web
     name: monsterdeals-backend
     runtime: node
     plan: free
-    region: frankfurt
     rootDir: backend
     buildCommand: npm install
     startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: PORT
+        value: 8080
