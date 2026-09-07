@@ -26,11 +26,12 @@ class OfferRepository(
             json(Json { ignoreUnknownKeys = true })
         }
         // Render (Gratis-Tier) schlaeft nach Inaktivitaet ein und braucht beim
-        // Aufwachen 30-50s, dazu kommt die Laufzeit der Preissuche selbst.
+        // Aufwachen 30-50s. Der REWE-Scraper startet zusaetzlich einen echten
+        // Headless-Browser (langsam auf dem Gratis-Tier), deshalb grosszuegig.
         install(HttpTimeout) {
-            requestTimeoutMillis = 60_000
-            connectTimeoutMillis = 60_000
-            socketTimeoutMillis = 60_000
+            requestTimeoutMillis = 120_000
+            connectTimeoutMillis = 120_000
+            socketTimeoutMillis = 120_000
         }
     }
 
