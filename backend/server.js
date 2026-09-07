@@ -55,6 +55,16 @@ async function fetchHtml(url) {
   return r.text();
 }
 
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 /**
  * Manche Seiten (REWE) blocken node-fetch/Node's https-Modul per TLS-
  * Fingerprinting, lassen curl aber durch (anderer TLS-Stack). Ruft das
@@ -264,6 +274,11 @@ app.get("/offers", async (req, res) => {
     for (const [i, o] of raw.entries()) {
       const geo = await geocodeStore(o.storeName, place.city, lat, lon);
       if (!geo) continue;
+      // Photons Textsuche kann daneben liegen (z.B. eine Strasse, die nur
+      // zufaellig wie der Ortsname heisst, in einer ganz anderen Stadt).
+      // Ergebnisse weit weg vom gesuchten Standort verwerfen statt eine
+      // falsche "Filiale in der Naehe" vorzugaukeln.
+      if (haversineKm(lat, lon, geo.lat, geo.lon) > 100) continue;
       offers.push({ id: `${key}-${i}`, ...o, storeAddress: geo.address, lat: geo.lat, lon: geo.lon });
       await new Promise((r) => setTimeout(r, 300)); // hoeflicher Abstand zwischen Anfragen
     }
