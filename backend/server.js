@@ -231,11 +231,15 @@ app.get("/offers", async (req, res) => {
     }
 
     const settled = await Promise.allSettled(SCRAPERS.map((fn) => fn(brandQuery)));
+    const scraperErrors = [];
     const raw = settled.flatMap((r, i) => {
       if (r.status === "fulfilled") return r.value;
-      console.error(`Scraper ${SCRAPERS[i].name} failed:`, r.reason?.message || r.reason);
+      const msg = r.reason?.message || String(r.reason);
+      console.error(`Scraper ${SCRAPERS[i].name} failed:`, msg);
+      scraperErrors.push(`${SCRAPERS[i].name}: ${msg}`);
       return [];
     });
+    if (req.query.debug === "1") return res.json({ raw, scraperErrors });
 
     const offers = [];
     for (const [i, o] of raw.entries()) {
