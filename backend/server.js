@@ -267,4 +267,19 @@ app.get("/offers", async (req, res) => {
 });
 
 app.get("/health", (_, res) => res.send("ok"));
+
+app.get("/debug-rewe-raw", async (_, res) => {
+  try {
+    const url = "https://www.rewe.de/angebote/nationale-angebote/alkoholfreie-getraenke/";
+    const html = await fetchHtmlViaCurl(url);
+    res.json({
+      length: html.length,
+      hasCorOffer: html.includes("cor-offer"),
+      hasCoca: html.includes("Coca"),
+      first500: html.slice(0, 500)
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack });
+  }
+});
 app.listen(PORT, () => console.log(`laeuft auf :${PORT}`));
