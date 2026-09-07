@@ -2,6 +2,7 @@ package de.monsterdeals.data
 
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
+import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.get
 import io.ktor.client.request.parameter
@@ -18,11 +19,18 @@ import kotlinx.serialization.json.Json
  * Prospekt-Anbieter. Details im README.
  */
 class OfferRepository(
-    private val baseUrl: String = "https://dein-backend.example.com"
+    private val baseUrl: String = "https://monsterdeals-backend.onrender.com"
 ) {
     private val client = HttpClient {
         install(ContentNegotiation) {
             json(Json { ignoreUnknownKeys = true })
+        }
+        // Render (Gratis-Tier) schlaeft nach Inaktivitaet ein und braucht beim
+        // Aufwachen 30-50s, dazu kommt die Laufzeit der Preissuche selbst.
+        install(HttpTimeout) {
+            requestTimeoutMillis = 60_000
+            connectTimeoutMillis = 60_000
+            socketTimeoutMillis = 60_000
         }
     }
 

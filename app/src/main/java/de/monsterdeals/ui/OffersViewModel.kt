@@ -24,8 +24,8 @@ class OffersViewModel(app: Application) : AndroidViewModel(app) {
     private val locationProvider = LocationProvider(app)
     private val repo = OfferRepository()
 
-    // Kein Backend im Einsatz (kostenpflichtig) -> Demo-Daten, komplett gratis
-    private val useDemoData = true
+    // Echtes Backend (Render + Gemini-Websuche, Gratis-Tier)
+    private val useDemoData = false
 
     private val _state = MutableStateFlow<UiState>(UiState.AskingPermissions)
     val state: StateFlow<UiState> = _state.asStateFlow()
