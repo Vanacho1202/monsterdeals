@@ -78,7 +78,7 @@ let browserPromise = null;
 async function getBrowser() {
   if (!browserPromise) {
     browserPromise = puppeteer.launch({
-      args: puppeteer.defaultArgs({ args: chromium.args, headless: "shell" }),
+      args: chromium.args,
       executablePath: await chromium.executablePath(),
       headless: "shell"
     });
