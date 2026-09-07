@@ -197,15 +197,24 @@ async function scrapeAldiNord(query) {
   const catalog = typeof apiDataRaw === "string" ? JSON.parse(apiDataRaw) : apiDataRaw;
   const matches = [];
   findProductsWithBrand(catalog, query, matches);
-  return matches.map((p) => ({
-    storeName: "Aldi Nord",
-    product: `${p.brandName} ${p.shortDescription || p.name || ""}`.trim(),
-    price: p.currentPrice?.priceValue ?? null,
-    deposit: p.depositValue ?? 0,
-    regularPrice: null,
-    validUntil: p.currentPrice?.validUntilLocalDate || "",
-    source: url
-  })).filter((o) => typeof o.price === "number");
+  return matches.map((p) => {
+    // Aldi Nord liefert keine explizite Stueckzahl. Preise sind oft
+    // Multipacks (z.B. 10x0,5l) - anhand des Liter-Grundpreises schaetzen,
+    // damit "7,77 EUR" nicht wie ein Einzeldosen-Preis wirkt.
+    const liters = p.currentPrice?.basePrice?.[0]?.basePriceScale === "Liter"
+      ? p.currentPrice.priceValue / p.currentPrice.basePrice[0].basePriceValue
+      : null;
+    const packNote = liters && liters > 0.6 ? ` (Multipack, ca. ${liters.toFixed(1)} L gesamt)` : "";
+    return {
+      storeName: "Aldi Nord",
+      product: `${p.brandName} ${p.shortDescription || p.name || ""}`.trim() + packNote,
+      price: p.currentPrice?.priceValue ?? null,
+      deposit: p.depositValue ?? 0,
+      regularPrice: null,
+      validUntil: p.currentPrice?.validUntilLocalDate || "",
+      source: url
+    };
+  }).filter((o) => typeof o.price === "number");
 }
 
 const SCRAPERS = [scrapeRewe, scrapeTrinkgut, scrapeKaufland, scrapeAldiNord];
