@@ -13,8 +13,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.SearchOff
-import androidx.compose.material.icons.filled.WifiOff
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -80,7 +80,7 @@ fun OffersScreen(
                     }
 
                     is UiState.Error -> CenteredMessage(
-                        icon = Icons.Default.WifiOff,
+                        icon = Icons.Default.Warning,
                         title = "Das hat nicht geklappt",
                         subtitle = s.message,
                         action = { Button(onClick = onRetry) { Text("Erneut versuchen") } }
@@ -89,7 +89,7 @@ fun OffersScreen(
                     is UiState.Ready ->
                         if (s.offers.isEmpty()) {
                             CenteredMessage(
-                                icon = Icons.Default.SearchOff,
+                                icon = Icons.Default.Search,
                                 title = "Nichts gefunden",
                                 subtitle = "Aktuell kein Monster-Energy-Angebot in deiner Naehe.",
                                 action = { OutlinedButton(onClick = onRetry) { Text("Erneut versuchen") } }
