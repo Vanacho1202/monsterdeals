@@ -7,6 +7,7 @@ import de.monsterdeals.data.Offer
 import de.monsterdeals.data.OfferRepository
 import de.monsterdeals.location.LatLon
 import de.monsterdeals.location.LocationProvider
+import de.monsterdeals.prefs.LastLocation
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -47,6 +48,10 @@ class OffersViewModel(app: Application) : AndroidViewModel(app) {
                 _state.value = UiState.Error("Standort konnte nicht ermittelt werden.")
                 return@launch
             }
+            // Fuer den periodischen Hintergrund-Check (DealCheckWorker) -
+            // der fragt ohne eigene Standortabfrage einfach diesen
+            // zwischengespeicherten Wert ab.
+            LastLocation.save(getApplication(), here.lat, here.lon)
             try {
                 val offers = if (useDemoData) {
                     repo.demoOffers(here.lat, here.lon)

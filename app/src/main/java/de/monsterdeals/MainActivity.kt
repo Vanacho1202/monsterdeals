@@ -6,12 +6,13 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import de.monsterdeals.notify.Notifications
 import de.monsterdeals.ui.OffersScreen
 import de.monsterdeals.ui.OffersViewModel
+import de.monsterdeals.ui.theme.MonsterDealsTheme
+import de.monsterdeals.work.WorkScheduler
 
 class MainActivity : ComponentActivity() {
 
@@ -26,6 +27,7 @@ class MainActivity : ComponentActivity() {
         if (granted) {
             askNotificationPermission()
             vm.load()
+            WorkScheduler.schedule(this)
         } else {
             vm.permissionDenied()
         }
@@ -41,7 +43,7 @@ class MainActivity : ComponentActivity() {
         Notifications.createChannel(this)
 
         setContent {
-            MaterialTheme {
+            MonsterDealsTheme {
                 val state by vm.state.collectAsStateWithLifecycle()
                 OffersScreen(state = state, onRetry = { requestLocation() })
             }
