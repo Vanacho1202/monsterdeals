@@ -54,6 +54,13 @@ async function fetchHtml(url) {
   return r.text();
 }
 
+// "2026-09-12" -> "12.09.2026" (deutsches Format, passend zu den anderen Quellen)
+function formatDate(isoDate) {
+  if (!isoDate) return "";
+  const m = isoDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? `${m[3]}.${m[2]}.${m[1]}` : isoDate;
+}
+
 function haversineKm(lat1, lon1, lat2, lon2) {
   const R = 6371;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
@@ -124,7 +131,12 @@ async function geocodeStores(name, nearLat, nearLon, maxResults = 3, maxKm = 100
 /* ---------- Scraper: Trinkgut (Shopware, .product-box) ---------- */
 async function scrapeTrinkgut(query) {
   const url = "https://www.trinkgut.de/angebote";
-  const $ = cheerio.load(await fetchHtml(url));
+  const html = await fetchHtml(url);
+  const $ = cheerio.load(html);
+  // Seitenweite Gueltigkeit, gilt fuer alle Angebote auf der Seite:
+  // "Gueltig vom 07.09.2026 bis 12.09.2026"
+  const validMatch = html.match(/[GgÜü]ltig vom \d{2}\.\d{2}\.\d{4} bis (\d{2}\.\d{2}\.\d{4})/);
+  const validUntil = validMatch ? validMatch[1] : "";
   const out = [];
   $(".product-box").each((_, el) => {
     const name = $(el).find(".product-name").text().trim();
@@ -142,7 +154,7 @@ async function scrapeTrinkgut(query) {
       price,
       deposit: /dpg/i.test(imgSrc) ? 0.25 : 0,
       regularPrice: null,
-      validUntil: "",
+      validUntil,
       source: url
     });
   });
@@ -152,7 +164,12 @@ async function scrapeTrinkgut(query) {
 /* ---------- Scraper: Kaufland (.k-product-tile) ---------- */
 async function scrapeKaufland(query) {
   const url = "https://filiale.kaufland.de/angebote.html";
-  const $ = cheerio.load(await fetchHtml(url));
+  const html = await fetchHtml(url);
+  const $ = cheerio.load(html);
+  // "Gueltig vom 03.09. bis 09.09." - ohne Jahr, deshalb aktuelles Jahr
+  // ergaenzen (die Seite zeigt immer nur die laufende Angebotswoche).
+  const validMatch = html.match(/[GgÜü]ltig vom \d{2}\.\d{2}\. bis (\d{2}\.\d{2}\.)/);
+  const validUntil = validMatch ? `${validMatch[1]}${new Date().getFullYear()}` : "";
   const out = [];
   $(".k-product-tile").each((_, el) => {
     const title = $(el).find(".k-product-tile__title").text().trim();
@@ -171,7 +188,7 @@ async function scrapeKaufland(query) {
       price,
       deposit: 0,
       regularPrice: Number.isNaN(regularPrice) ? null : regularPrice,
-      validUntil: "",
+      validUntil,
       source: url
     });
   });
@@ -223,7 +240,9 @@ async function scrapeAldiNord(query) {
       price: pricePerCan ?? totalPrice,
       deposit: isPerLiter ? CAN_DEPOSIT : (p.depositValue ?? 0),
       regularPrice: null,
-      validUntil: p.currentPrice?.validUntilLocalDate || "",
+      // validUntilLocalDate (YYYY-MM-DD) steckt in promotionPrices[0], nicht
+      // direkt in currentPrice - currentPrice hat nur Unix-Timestamps.
+      validUntil: formatDate(p.promotionPrices?.[0]?.validUntilLocalDate),
       source: url
     };
   }).filter((o) => typeof o.price === "number");
@@ -243,6 +262,17 @@ async function scrapeMeinprospekt(query) {
   const url = "https://www.meinprospekt.de/angebote/monster-energy";
   const $ = cheerio.load(await fetchHtml(url));
   const out = [];
+  // Die Angebotskarten selbst haben kein Datum, aber die Prospekt-Liste
+  // weiter oben auf der Seite ("REWE | Mo. 7.9. - Sa. 12.9.2026") schon -
+  // Ketten -> Enddatum vorab einsammeln (erster Treffer je Kette, falls
+  // eine Kette mehrere Prospekte hat).
+  const validUntilByChain = new Map();
+  $(".font-bold.truncate").each((_, el) => {
+    const chain = $(el).text().trim().toLowerCase();
+    const dateText = $(el).parent().find(".text-sm.text-dark1").first().text().trim();
+    const m = dateText.match(/(\d{1,2}\.\d{1,2}\.\d{4})\s*$/);
+    if (m && !validUntilByChain.has(chain)) validUntilByChain.set(chain, m[1]);
+  });
   // Jede Angebotskarte: <p>Haendler</p><p>Marke</p><p>Produktart</p>, dann
   // Preis (.text-primary) und optional Streichpreis (.line-through).
   const CAN_LITERS = 0.5; // Standard-Dosengroesse fuer Energy Drinks in DE
@@ -280,7 +310,7 @@ async function scrapeMeinprospekt(query) {
       price: pricePerCan ?? totalPrice,
       deposit: 0.25, // Standard-Einwegpfand, Seite gibt es nicht separat an
       regularPrice: regularPrice != null && !Number.isNaN(regularPrice) ? regularPrice : null,
-      validUntil: "",
+      validUntil: validUntilByChain.get(storeName.toLowerCase()) || "",
       source: url
     });
   });
