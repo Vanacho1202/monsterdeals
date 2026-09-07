@@ -19,7 +19,7 @@ import kotlinx.serialization.json.Json
  * Prospekt-Anbieter. Details im README.
  */
 class OfferRepository(
-    private val baseUrl: String = "https://monsterdeals-backend.onrender.com"
+    private val baseUrl: String = "https://monsterdeals-backend-yte0.onrender.com"
 ) {
     private val client = HttpClient {
         install(ContentNegotiation) {

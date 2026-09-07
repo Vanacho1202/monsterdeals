@@ -12,20 +12,20 @@
  *  4. Ergebnis wird 6 Stunden gecacht
  *
  * Abdeckung / bekannte Einschraenkungen:
- *  - Aldi Nord, Trinkgut, Kaufland: funktionieren
- *  - REWE: node-fetch/Node's https-Modul bekommen 403 (TLS-Fingerprinting),
- *    curl kommt durch - deshalb ruft scrapeRewe() curl als Subprozess auf
- *    (fetchHtmlViaCurl) statt node-fetch zu nutzen. ABER: von Render's
- *    Server-Standort aus liefert REWE nur die generische Homepage statt
- *    der Angebotsseite (vermutlich Geo-IP-Weiche, REWE-Preise sind
- *    regional) - render.yaml setzt deshalb "region: frankfurt", damit
- *    der Server eine deutsche IP bekommt. Falls REWE trotzdem leer bleibt:
- *    pruefen, ob der Render-Service tatsaechlich in Frankfurt laeuft
- *    (Region laesst sich bei bestehenden Services oft nicht nachtraeglich
- *    aendern, dann hilft nur ein neu angelegter Service).
+ *  - Aldi Nord, Trinkgut, Kaufland: funktionieren zuverlaessig.
+ *  - REWE: NICHT eingebaut, nach ausfuehrlichem Test aufgegeben. node-fetch
+ *    und Node's https-Modul bekommen 403 (TLS-Fingerprinting), curl kommt
+ *    zwar technisch durch, liefert von einem Render-Server aus aber nur
+ *    die generische Homepage statt der Angebotsseite - und zwar UNABHAENGIG
+ *    von der Region (getestet: Oregon UND Frankfurt liefern identisch die
+ *    Homepage). Das ist also keine Geo-Sperre, sondern eine IP-Bereich-
+ *    Sperre gegen Render/Cloud-Hosting generell. Ein echter Fix (Proxy mit
+ *    Residential-IP o.ae.) waere ein aktiver Bot-Erkennungs-Bypass und
+ *    wurde deshalb bewusst nicht gebaut.
  *    (Ein zuvor versuchter echter Headless-Chrome via puppeteer-core +
- *    @sparticuz/chromium hat auf Render's 512-MB-Gratis-Tier den ganzen
- *    Server mit Out-of-Memory abgeschossen - deshalb der curl-Ansatz.)
+ *    @sparticuz/chromium haette das RAM-Problem noch draufgesetzt: hat auf
+ *    Render's 512-MB-Gratis-Tier den ganzen Server mit Out-of-Memory
+ *    abgeschossen.)
  *  - EDEKA, Aldi Sued, Netto (beide Varianten): liefern 403 auch mit curl.
  *  - Penny: Struktur vorhanden, aber kein bestaetigtes Beispiel gefunden,
  *    deshalb nicht eingebaut.
@@ -37,10 +37,6 @@
 import express from "express";
 import fetch from "node-fetch";
 import * as cheerio from "cheerio";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -63,22 +59,6 @@ function haversineKm(lat1, lon1, lat2, lon2) {
     Math.sin(dLat / 2) ** 2 +
     Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
-/**
- * Manche Seiten (REWE) blocken node-fetch/Node's https-Modul per TLS-
- * Fingerprinting, lassen curl aber durch (anderer TLS-Stack). Ruft das
- * echte curl-Binary als Subprozess auf - kein Fake, kein Bot-Bypass,
- * sondern dasselbe Tool, das schon nachweislich funktioniert. Braucht
- * kaum RAM im Gegensatz zu einem echten Browser.
- */
-async function fetchHtmlViaCurl(url) {
-  const { stdout } = await execFileAsync(
-    "curl",
-    ["-sL", "-m", "20", "-A", UA, "-H", "Accept-Language: de-DE,de;q=0.9", url],
-    { maxBuffer: 20 * 1024 * 1024, timeout: 25000 }
-  );
-  return stdout;
 }
 
 /* ---------- Geocoding ueber Photon (OSM-basiert) ---------- */
@@ -107,30 +87,6 @@ async function geocodeStore(name, city, nearLat, nearLon) {
   const p = f.properties;
   const address = [p.name, p.street, p.housenumber, p.postcode, p.city].filter(Boolean).join(", ");
   return { lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0], address };
-}
-
-/* ---------- Scraper: REWE (blockt node-fetch, curl kommt durch) ---------- */
-async function scrapeRewe(query) {
-  const url = "https://www.rewe.de/angebote/nationale-angebote/alkoholfreie-getraenke/";
-  const html = await fetchHtmlViaCurl(url);
-  const $ = cheerio.load(html);
-  const out = [];
-  $("a.cor-offer-information__title-link").each((_, el) => {
-    const label = $(el).attr("aria-label") || "";
-    if (!label.toLowerCase().includes(query.toLowerCase())) return;
-    const m = label.match(/^(.*?),\s*Aktionspreis\s*([\d,]+)\s*€/);
-    if (!m) return;
-    out.push({
-      storeName: "REWE",
-      product: m[1].trim(),
-      price: parseFloat(m[2].replace(",", ".")),
-      deposit: 0,
-      regularPrice: null,
-      validUntil: "",
-      source: url
-    });
-  });
-  return out;
 }
 
 /* ---------- Scraper: Trinkgut (Shopware, .product-box) ---------- */
@@ -241,7 +197,7 @@ async function scrapeAldiNord(query) {
   }).filter((o) => typeof o.price === "number");
 }
 
-const SCRAPERS = [scrapeRewe, scrapeTrinkgut, scrapeKaufland, scrapeAldiNord];
+const SCRAPERS = [scrapeTrinkgut, scrapeKaufland, scrapeAldiNord];
 
 /* ---------- Endpunkt ---------- */
 app.get("/offers", async (req, res) => {
