@@ -78,7 +78,7 @@ Nur Angebote, die du wirklich belegen kannst. Keine Erfindungen.
 Wenn du nichts findest, antworte mit [].`;
 
   const response = await genai.models.generateContent({
-    model: "gemini-3.6-flash",
+    model: "gemini-3.5-flash",
     contents: prompt,
     config: {
       tools: [{ type: "google_search" }]
