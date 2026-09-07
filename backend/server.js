@@ -304,10 +304,17 @@ async function scrapeMeinprospekt(query) {
     const pricePerCan = unitPricePerLiter != null && !Number.isNaN(unitPricePerLiter)
       ? Math.round(unitPricePerLiter * CAN_LITERS * 100) / 100
       : null;
+    // Ohne Grundpreis-Notiz ("1 l = ...") laesst sich Einzeldose vs.
+    // Mehrfachpack nicht wirklich pruefen - dann NICHT stillschweigend
+    // "Einzeldose" behaupten (waere geraten, nicht erkannt), sondern
+    // ehrlich als unklar kennzeichnen.
     const isMultipack = pricePerCan != null && Math.abs(totalPrice - pricePerCan) > 0.05;
-    const packNote = isMultipack
-      ? ` (aus ${totalPrice.toFixed(2)} EUR Mehrfachpackung umgerechnet, Angebot gilt nur fuer die ganze Packung)`
-      : " (Einzeldose)";
+    const packNote =
+      pricePerCan == null
+        ? " (Einzel-/Mehrfachpackung nicht eindeutig erkennbar)"
+        : isMultipack
+        ? ` (aus ${totalPrice.toFixed(2)} EUR Mehrfachpackung umgerechnet, Angebot gilt nur fuer die ganze Packung)`
+        : " (Einzeldose)";
     out.push({
       storeName,
       product: ([brand, productType].filter(Boolean).join(" ") || "Monster Energy") + packNote,
