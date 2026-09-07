@@ -229,9 +229,14 @@ async function scrapeMeinprospekt(query) {
     if (!storeName || Number.isNaN(price)) return;
     const oldPriceText = $(el).find(".line-through").first().text().trim();
     const regularPrice = oldPriceText ? parseFloat(oldPriceText.replace(",", ".")) : null;
+    // Die Seite gibt keine Packungsgroesse an. Eine Einzeldose Monster
+    // Energy kostet auch zum vollen Preis kaum je mehr als ~2 EUR - alles
+    // darueber ist mit hoher Wahrscheinlichkeit ein Mehrfachpack-Gesamtpreis.
+    // Lieber ehrlich kennzeichnen als einen falschen Einzelpreis vorgaukeln.
+    const looksLikeMultipack = price > 2.5;
     out.push({
       storeName,
-      product: [brand, productType].filter(Boolean).join(" ") || "Monster Energy",
+      product: [brand, productType].filter(Boolean).join(" ") + (looksLikeMultipack ? " (vermutlich Mehrfachpackung, nicht Einzelpreis)" : "") || "Monster Energy",
       price,
       deposit: 0.25, // Standard-Einwegpfand, Seite gibt es nicht separat an
       regularPrice: regularPrice != null && !Number.isNaN(regularPrice) ? regularPrice : null,
