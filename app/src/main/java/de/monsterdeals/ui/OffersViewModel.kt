@@ -53,10 +53,15 @@ class OffersViewModel(app: Application) : AndroidViewModel(app) {
                 } else {
                     repo.nearbyOffers(here.lat, here.lon, radiusKm)
                 }
-                _state.value = UiState.Ready(
-                    offers.sortedBy { it.price },
-                    here
-                )
+                // Reine Preissortierung reisst Ketten mit mehreren Filialen
+                // auseinander: eine 1 Cent guenstigere, aber 70km entfernte
+                // Filiale landete vor einer nahen, minimal teureren. Deshalb
+                // Preis und Entfernung kombiniert gewichten (2 Cent "Strafe"
+                // pro Kilometer) statt rein nach Preis zu sortieren.
+                val sorted = offers.sortedBy { offer ->
+                    offer.price + offer.distanceKm(here.lat, here.lon) * 0.02
+                }
+                _state.value = UiState.Ready(sorted, here)
             } catch (e: Exception) {
                 _state.value = UiState.Error("Angebote konnten nicht geladen werden: ${e.message}")
             }
