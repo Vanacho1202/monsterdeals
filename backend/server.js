@@ -252,7 +252,7 @@ app.get("/offers", async (req, res) => {
     const errors = [];
     const raw = settled.flatMap((r, i) => {
       if (r.status === "fulfilled") return r.value;
-      const msg = r.reason?.message || String(r.reason);
+      const msg = r.reason?.stack || r.reason?.message || String(r.reason);
       console.error(`Scraper ${SCRAPERS[i].name} failed:`, msg);
       errors.push(`${SCRAPERS[i].name}: ${msg}`);
       return [];
