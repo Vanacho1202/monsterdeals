@@ -25,26 +25,37 @@ const UA = "MonsterDeals/1.0 (kontakt@example.com)"; // Nominatim verlangt eine 
 const cache = new Map();
 const CACHE_MS = 6 * 60 * 60 * 1000;
 
+/*
+ * Geocoding ueber Photon (komoot, OSM-basiert, https://photon.komoot.io).
+ * Nominatim direkt sperrt Anfragen von Cloud-/Hosting-IPs (Render, AWS, ...)
+ * pauschal mit "Access denied" - siehe operations.osmfoundation.org/policies/nominatim.
+ * Photon nutzt dieselben OSM-Daten, ist aber fuer Server-Betrieb nutzbar.
+ */
+
 /* ---------- 1. Wo ist der Nutzer? ---------- */
 async function reverseGeocode(lat, lon) {
-  const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=12`;
+  const url = `https://photon.komoot.io/reverse?lat=${lat}&lon=${lon}`;
   const r = await fetch(url, { headers: { "User-Agent": UA } });
   const j = await r.json();
-  const a = j.address || {};
+  const p = j.features?.[0]?.properties || {};
   return {
-    city: a.city || a.town || a.village || a.county || "",
-    postcode: a.postcode || ""
+    city: p.city || p.town || p.village || p.district || "",
+    postcode: p.postcode || ""
   };
 }
 
 /* ---------- 2. Laden -> Koordinaten ---------- */
 async function geocodeStore(name, city) {
   const q = encodeURIComponent(`${name}, ${city}`);
-  const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${q}`;
+  const url = `https://photon.komoot.io/api/?q=${q}&limit=1`;
   const r = await fetch(url, { headers: { "User-Agent": UA } });
   const j = await r.json();
-  if (!j.length) return null;
-  return { lat: parseFloat(j[0].lat), lon: parseFloat(j[0].lon), address: j[0].display_name };
+  const f = j.features?.[0];
+  if (!f) return null;
+  const p = f.properties;
+  const address = [p.name, p.street, p.housenumber, p.postcode, p.city]
+    .filter(Boolean).join(", ");
+  return { lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0], address };
 }
 
 /* ---------- 3. Angebote per Websuche finden ---------- */
@@ -127,7 +138,7 @@ app.get("/offers", async (req, res) => {
         lon: geo.lon,
         source: o.source ?? ""
       });
-      await new Promise((r) => setTimeout(r, 1100)); // Nominatim: max 1 Anfrage/Sekunde
+      await new Promise((r) => setTimeout(r, 300)); // hoeflicher Abstand zwischen Anfragen
     }
 
     cache.set(key, { time: Date.now(), offers });
