@@ -83,12 +83,16 @@ async function reverseGeocode(lat, lon) {
   };
 }
 
-async function geocodeStore(name, city) {
+async function geocodeStore(name, city, nearLat, nearLon) {
   const q = encodeURIComponent(`${name}, ${city}`);
-  const url = `https://photon.komoot.io/api/?q=${q}&limit=1`;
+  // lat/lon als Gewichtung uebergeben, damit Photon Treffer in der Naehe
+  // bevorzugt; mehrere Kandidaten holen und auf Deutschland filtern, sonst
+  // kann eine seltene/falsch geschriebene Kette auf einen voellig anderen
+  // (sogar auslaendischen) Ort ausweichen.
+  const url = `https://photon.komoot.io/api/?q=${q}&limit=5&lat=${nearLat}&lon=${nearLon}`;
   const r = await fetch(url, { headers: { "User-Agent": UA } });
   const j = await r.json();
-  const f = j.features?.[0];
+  const f = (j.features || []).find((feat) => feat.properties?.countrycode === "DE");
   if (!f) return null;
   const p = f.properties;
   const address = [p.name, p.street, p.housenumber, p.postcode, p.city].filter(Boolean).join(", ");
@@ -258,7 +262,7 @@ app.get("/offers", async (req, res) => {
 
     const offers = [];
     for (const [i, o] of raw.entries()) {
-      const geo = await geocodeStore(o.storeName, place.city);
+      const geo = await geocodeStore(o.storeName, place.city, lat, lon);
       if (!geo) continue;
       offers.push({ id: `${key}-${i}`, ...o, storeAddress: geo.address, lat: geo.lat, lon: geo.lon });
       await new Promise((r) => setTimeout(r, 300)); // hoeflicher Abstand zwischen Anfragen
