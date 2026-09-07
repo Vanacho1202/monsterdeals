@@ -3,6 +3,7 @@ services:
     name: monsterdeals-backend
     runtime: node
     plan: free
+    region: frankfurt
     rootDir: backend
     buildCommand: npm install
     startCommand: npm start

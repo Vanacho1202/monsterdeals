@@ -12,16 +12,21 @@
  *  4. Ergebnis wird 6 Stunden gecacht
  *
  * Abdeckung / bekannte Einschraenkungen:
- *  - REWE, Aldi Nord, Trinkgut, Kaufland: funktionieren
- *  - REWE blockt node-fetch UND Node's natives https-Modul mit 403
- *    (TLS-Fingerprinting, vermutlich Akamai), curl kommt aber durch -
- *    deshalb ruft scrapeRewe() das curl-Binary als Subprozess auf statt
- *    node-fetch zu nutzen (fetchHtmlViaCurl). Ein zuvor versuchter echter
- *    Headless-Chrome (puppeteer-core + @sparticuz/chromium) hat auf
- *    Render's 512-MB-Gratis-Tier den gesamten Server mit Out-of-Memory
- *    abgeschossen - der curl-Subprozess braucht dagegen kaum RAM.
- *  - EDEKA, Aldi Sued, Netto (beide Varianten): liefern 403, auch mit curl
- *    nicht probiert.
+ *  - Aldi Nord, Trinkgut, Kaufland: funktionieren
+ *  - REWE: node-fetch/Node's https-Modul bekommen 403 (TLS-Fingerprinting),
+ *    curl kommt durch - deshalb ruft scrapeRewe() curl als Subprozess auf
+ *    (fetchHtmlViaCurl) statt node-fetch zu nutzen. ABER: von Render's
+ *    Server-Standort aus liefert REWE nur die generische Homepage statt
+ *    der Angebotsseite (vermutlich Geo-IP-Weiche, REWE-Preise sind
+ *    regional) - render.yaml setzt deshalb "region: frankfurt", damit
+ *    der Server eine deutsche IP bekommt. Falls REWE trotzdem leer bleibt:
+ *    pruefen, ob der Render-Service tatsaechlich in Frankfurt laeuft
+ *    (Region laesst sich bei bestehenden Services oft nicht nachtraeglich
+ *    aendern, dann hilft nur ein neu angelegter Service).
+ *    (Ein zuvor versuchter echter Headless-Chrome via puppeteer-core +
+ *    @sparticuz/chromium hat auf Render's 512-MB-Gratis-Tier den ganzen
+ *    Server mit Out-of-Memory abgeschossen - deshalb der curl-Ansatz.)
+ *  - EDEKA, Aldi Sued, Netto (beide Varianten): liefern 403 auch mit curl.
  *  - Penny: Struktur vorhanden, aber kein bestaetigtes Beispiel gefunden,
  *    deshalb nicht eingebaut.
  *  - Alle Preise sind national/online-Prospekt-Daten, nicht filialscharf.
@@ -240,15 +245,11 @@ app.get("/offers", async (req, res) => {
     }
 
     const settled = await Promise.allSettled(SCRAPERS.map((fn) => fn(brandQuery)));
-    const scraperErrors = [];
     const raw = settled.flatMap((r, i) => {
       if (r.status === "fulfilled") return r.value;
-      const msg = r.reason?.message || String(r.reason);
-      console.error(`Scraper ${SCRAPERS[i].name} failed:`, msg);
-      scraperErrors.push(`${SCRAPERS[i].name}: ${msg}`);
+      console.error(`Scraper ${SCRAPERS[i].name} failed:`, r.reason?.message || r.reason);
       return [];
     });
-    if (req.query.debug === "1") return res.json({ raw, scraperErrors });
 
     const offers = [];
     for (const [i, o] of raw.entries()) {
@@ -267,19 +268,4 @@ app.get("/offers", async (req, res) => {
 });
 
 app.get("/health", (_, res) => res.send("ok"));
-
-app.get("/debug-rewe-raw", async (_, res) => {
-  try {
-    const url = "https://www.rewe.de/angebote/nationale-angebote/alkoholfreie-getraenke/";
-    const html = await fetchHtmlViaCurl(url);
-    res.json({
-      length: html.length,
-      hasCorOffer: html.includes("cor-offer"),
-      hasCoca: html.includes("Coca"),
-      first500: html.slice(0, 500)
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message, stack: e.stack });
-  }
-});
 app.listen(PORT, () => console.log(`laeuft auf :${PORT}`));
