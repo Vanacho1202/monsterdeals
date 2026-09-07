@@ -202,19 +202,24 @@ async function scrapeAldiNord(query) {
   const catalog = typeof apiDataRaw === "string" ? JSON.parse(apiDataRaw) : apiDataRaw;
   const matches = [];
   findProductsWithBrand(catalog, query, matches);
+  const CAN_LITERS = 0.5; // Standard-Dosengroesse fuer Energy Drinks in DE
+  const CAN_DEPOSIT = 0.25; // Einwegpfand pro Dose
   return matches.map((p) => {
-    // Aldi Nord liefert keine explizite Stueckzahl. Preise sind oft
-    // Multipacks (z.B. 10x0,5l) - anhand des Liter-Grundpreises schaetzen,
-    // damit "7,77 EUR" nicht wie ein Einzeldosen-Preis wirkt.
-    const liters = p.currentPrice?.basePrice?.[0]?.basePriceScale === "Liter"
-      ? p.currentPrice.priceValue / p.currentPrice.basePrice[0].basePriceValue
-      : null;
-    const packNote = liters && liters > 0.6 ? ` (Multipack, ca. ${liters.toFixed(1)} L gesamt)` : "";
+    // Aldi Nord liefert keine Stueckzahl, nur einen Gesamtpreis (oft ein
+    // Multipack, z.B. 10x0,5l) + Liter-Grundpreis. Auf Dosenpreis umrechnen,
+    // damit die Zahl mit den anderen Ketten (Preis pro Dose) vergleichbar
+    // ist, statt als "7,77 EUR" wie ein Einzelpreis dazustehen.
+    const basePrice = p.currentPrice?.basePrice?.[0];
+    const isPerLiter = basePrice?.basePriceScale === "Liter";
+    const pricePerCan = isPerLiter ? Math.round(basePrice.basePriceValue * CAN_LITERS * 100) / 100 : null;
+    const totalPrice = p.currentPrice?.priceValue ?? null;
+    const isMultipack = isPerLiter && totalPrice != null && totalPrice / basePrice.basePriceValue > CAN_LITERS + 0.05;
+    const packNote = isMultipack ? ` (aus ${totalPrice.toFixed(2)} EUR Multipack umgerechnet)` : "";
     return {
       storeName: "Aldi Nord",
       product: `${p.brandName} ${p.shortDescription || p.name || ""}`.trim() + packNote,
-      price: p.currentPrice?.priceValue ?? null,
-      deposit: p.depositValue ?? 0,
+      price: pricePerCan ?? totalPrice,
+      deposit: isPerLiter ? CAN_DEPOSIT : (p.depositValue ?? 0),
       regularPrice: null,
       validUntil: p.currentPrice?.validUntilLocalDate || "",
       source: url
