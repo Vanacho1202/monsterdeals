@@ -219,25 +219,39 @@ async function scrapeMeinprospekt(query) {
   const out = [];
   // Jede Angebotskarte: <p>Haendler</p><p>Marke</p><p>Produktart</p>, dann
   // Preis (.text-primary) und optional Streichpreis (.line-through).
+  const CAN_LITERS = 0.5; // Standard-Dosengroesse fuer Energy Drinks in DE
   $("#OfferGrid [role=\"listitem\"]").each((_, el) => {
     const ps = $(el).find("p");
     const storeName = $(ps.get(0)).text().trim();
     const brand = $(ps.get(1)).text().trim();
     const productType = $(ps.get(2)).text().trim();
     const priceText = $(el).find(".text-primary").first().text().trim();
-    const price = parseFloat(priceText.replace(",", "."));
-    if (!storeName || Number.isNaN(price)) return;
+    const totalPrice = parseFloat(priceText.replace(",", "."));
+    if (!storeName || Number.isNaN(totalPrice)) return;
     const oldPriceText = $(el).find(".line-through").first().text().trim();
     const regularPrice = oldPriceText ? parseFloat(oldPriceText.replace(",", ".")) : null;
-    // Die Seite gibt keine Packungsgroesse an. Eine Einzeldose Monster
-    // Energy kostet auch zum vollen Preis kaum je mehr als ~2 EUR - alles
-    // darueber ist mit hoher Wahrscheinlichkeit ein Mehrfachpack-Gesamtpreis.
-    // Lieber ehrlich kennzeichnen als einen falschen Einzelpreis vorgaukeln.
-    const looksLikeMultipack = price > 2.5;
+    // Jede Karte hat eine Grundpreis-Notiz wie "(1 l = 1.78)". Das ist der
+    // Gesamtpreis geteilt durch die tatsaechliche Packungsgroesse in Litern -
+    // damit laesst sich ein echter Dosenpreis berechnen, auch fuer
+    // Mehrfachpackungen, statt nur zu vermuten/zu warnen. Getestet: bei
+    // bereits als Einzeldose ausgezeichneten Angeboten (Lidl) ergibt das
+    // exakt den angezeigten Preis zurueck.
+    let unitPriceText = "";
+    $(el).find("p").each((_, p) => {
+      const t = $(p).text().trim();
+      if (/1\s*l\s*=\s*[\d.,]+/i.test(t)) unitPriceText = t;
+    });
+    const unitMatch = unitPriceText.match(/=\s*([\d.,]+)/);
+    const unitPricePerLiter = unitMatch ? parseFloat(unitMatch[1].replace(",", ".")) : null;
+    const pricePerCan = unitPricePerLiter != null && !Number.isNaN(unitPricePerLiter)
+      ? Math.round(unitPricePerLiter * CAN_LITERS * 100) / 100
+      : null;
+    const isMultipack = pricePerCan != null && Math.abs(totalPrice - pricePerCan) > 0.05;
+    const packNote = isMultipack ? ` (aus ${totalPrice.toFixed(2)} EUR Mehrfachpackung umgerechnet)` : "";
     out.push({
       storeName,
-      product: [brand, productType].filter(Boolean).join(" ") + (looksLikeMultipack ? " (vermutlich Mehrfachpackung, nicht Einzelpreis)" : "") || "Monster Energy",
-      price,
+      product: ([brand, productType].filter(Boolean).join(" ") || "Monster Energy") + packNote,
+      price: pricePerCan ?? totalPrice,
       deposit: 0.25, // Standard-Einwegpfand, Seite gibt es nicht separat an
       regularPrice: regularPrice != null && !Number.isNaN(regularPrice) ? regularPrice : null,
       validUntil: "",
