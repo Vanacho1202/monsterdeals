@@ -75,13 +75,17 @@ async function reverseGeocode(lat, lon) {
   };
 }
 
-async function geocodeStore(name, city, nearLat, nearLon) {
-  const q = encodeURIComponent(`${name}, ${city}`);
-  // lat/lon als Gewichtung uebergeben, damit Photon Treffer in der Naehe
-  // bevorzugt; mehrere Kandidaten holen und auf Deutschland filtern, sonst
-  // kann eine seltene/falsch geschriebene Kette auf einen voellig anderen
-  // (sogar auslaendischen) Ort ausweichen.
-  const url = `https://photon.komoot.io/api/?q=${q}&limit=5&lat=${nearLat}&lon=${nearLon}`;
+async function geocodeStore(name, nearLat, nearLon) {
+  // NUR den Kettennamen suchen, ohne Stadt im Suchtext: Photons Textsuche
+  // kombiniert "Kette, kleiner Ort" oft schlecht (fand z.B. fuer "Lidl,
+  // Amoeneburg" NICHTS, obwohl "Lidl" allein + lat/lon-Gewichtung sofort
+  // mehrere echte Filialen in 10-25km Entfernung lieferte). lat/lon-
+  // Gewichtung reicht fuer die Naehe-Sortierung voellig aus.
+  const q = encodeURIComponent(name);
+  // Mehrere Kandidaten holen und auf Deutschland filtern, sonst kann eine
+  // seltene/falsch geschriebene Kette auf einen voellig anderen (sogar
+  // auslaendischen) Ort ausweichen.
+  const url = `https://photon.komoot.io/api/?q=${q}&limit=8&lat=${nearLat}&lon=${nearLon}`;
   const r = await fetch(url, { headers: { "User-Agent": UA } });
   const j = await r.json();
   const f = (j.features || []).find((feat) => feat.properties?.countrycode === "DE");
@@ -269,7 +273,7 @@ app.get("/offers", async (req, res) => {
 
     const offers = [];
     for (const [i, o] of raw.entries()) {
-      const geo = await geocodeStore(o.storeName, place.city, lat, lon);
+      const geo = await geocodeStore(o.storeName, lat, lon);
       if (!geo) continue;
       // Photons Textsuche kann daneben liegen (z.B. eine Strasse, die nur
       // zufaellig wie der Ortsname heisst, in einer ganz anderen Stadt).
