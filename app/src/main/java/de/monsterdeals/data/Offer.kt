@@ -8,6 +8,9 @@ data class Offer(
     val storeName: String,      // z.B. "REWE City"
     val storeAddress: String,
     val product: String,        // z.B. "Monster Energy Ultra 500ml"
+    val packInfo: String = "",  // z.B. "Einzeldose" oder "Mehrfachpackung (...)" -
+                                 // eigenes Feld statt Teil von "product", damit es
+                                 // bei langen Produktnamen nicht abgeschnitten wird
     val price: Double,          // Angebotspreis in Euro, OHNE Pfand
     val deposit: Double = 0.0,  // Pfand in Euro, separat an der Kasse faellig
     val regularPrice: Double?,  // Normalpreis, falls bekannt

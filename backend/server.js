@@ -150,7 +150,8 @@ async function scrapeTrinkgut(query) {
     const imgSrc = $(el).find("img").attr("src") || "";
     out.push({
       storeName: "Trinkgut",
-      product: `${name} (Einzeldose)`,
+      product: name,
+      packInfo: "Einzeldose",
       price,
       deposit: /dpg/i.test(imgSrc) ? 0.25 : 0,
       regularPrice: null,
@@ -184,7 +185,8 @@ async function scrapeKaufland(query) {
     const regularPrice = oldPriceText ? parseFloat(oldPriceText) : null;
     out.push({
       storeName: "Kaufland",
-      product: `${name} (Einzeldose)`,
+      product: name,
+      packInfo: "Einzeldose",
       price,
       deposit: 0,
       regularPrice: Number.isNaN(regularPrice) ? null : regularPrice,
@@ -233,12 +235,13 @@ async function scrapeAldiNord(query) {
     const pricePerCan = isPerLiter ? Math.round(basePrice.basePriceValue * CAN_LITERS * 100) / 100 : null;
     const totalPrice = p.currentPrice?.priceValue ?? null;
     const isMultipack = isPerLiter && totalPrice != null && totalPrice / basePrice.basePriceValue > CAN_LITERS + 0.05;
-    const packNote = isMultipack
-      ? ` (aus ${totalPrice.toFixed(2)} EUR Multipack umgerechnet, Angebot gilt nur fuer die ganze Packung)`
-      : " (Einzeldose)";
+    const packInfo = isMultipack
+      ? `Nur im Mehrfachpack (${totalPrice.toFixed(2)} EUR gesamt)`
+      : "Einzeldose";
     return {
       storeName: "Aldi Nord",
-      product: `${p.brandName} ${p.shortDescription || p.name || ""}`.trim() + packNote,
+      product: `${p.brandName} ${p.shortDescription || p.name || ""}`.trim(),
+      packInfo,
       price: pricePerCan ?? totalPrice,
       deposit: isPerLiter ? CAN_DEPOSIT : (p.depositValue ?? 0),
       regularPrice: null,
@@ -309,15 +312,16 @@ async function scrapeMeinprospekt(query) {
     // "Einzeldose" behaupten (waere geraten, nicht erkannt), sondern
     // ehrlich als unklar kennzeichnen.
     const isMultipack = pricePerCan != null && Math.abs(totalPrice - pricePerCan) > 0.05;
-    const packNote =
+    const packInfo =
       pricePerCan == null
-        ? " (Einzel-/Mehrfachpackung nicht eindeutig erkennbar)"
+        ? "Nicht eindeutig erkennbar"
         : isMultipack
-        ? ` (aus ${totalPrice.toFixed(2)} EUR Mehrfachpackung umgerechnet, Angebot gilt nur fuer die ganze Packung)`
-        : " (Einzeldose)";
+        ? `Nur im Mehrfachpack (${totalPrice.toFixed(2)} EUR gesamt)`
+        : "Einzeldose";
     out.push({
       storeName,
-      product: ([brand, productType].filter(Boolean).join(" ") || "Monster Energy") + packNote,
+      product: [brand, productType].filter(Boolean).join(" ") || "Monster Energy",
+      packInfo,
       price: pricePerCan ?? totalPrice,
       deposit: 0.25, // Standard-Einwegpfand, Seite gibt es nicht separat an
       regularPrice: regularPrice != null && !Number.isNaN(regularPrice) ? regularPrice : null,

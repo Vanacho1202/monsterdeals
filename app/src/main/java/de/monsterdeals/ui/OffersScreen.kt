@@ -197,6 +197,23 @@ private fun OfferCard(offer: Offer, here: LatLon) {
                         }
                     }
                 }
+                if (offer.packInfo.isNotBlank()) {
+                    Spacer(Modifier.height(6.dp))
+                    val isSingleCan = offer.packInfo == "Einzeldose"
+                    InfoChip(
+                        offer.packInfo,
+                        containerColor = if (isSingleCan) {
+                            MaterialTheme.colorScheme.surfaceVariant
+                        } else {
+                            MaterialTheme.colorScheme.tertiaryContainer
+                        },
+                        contentColor = if (isSingleCan) {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        } else {
+                            MaterialTheme.colorScheme.onTertiaryContainer
+                        }
+                    )
+                }
                 Spacer(Modifier.height(10.dp))
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
