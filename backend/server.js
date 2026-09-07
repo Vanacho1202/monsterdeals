@@ -17,12 +17,13 @@
  *  - REWE: blockt einfache HTTP-Requests (node-fetch UND Node's natives
  *    https-Modul) mit 403, obwohl derselbe Request per curl durchgeht -
  *    TLS-Fingerprinting (Akamai o.ae.), keine Sache der HTTP-Header.
- *    Deshalb per echtem, headless Chrome (puppeteer-core + @sparticuz/
- *    chromium) geladen - das ist kein Bot-Bypass, sondern ein tatsaechlicher
- *    Chrome-Browser mit echtem TLS-Fingerprint. Braucht mehr RAM/Zeit als
- *    die anderen Scraper; kann auf sehr kleinen Hosting-Plaenen knapp werden.
- *  - EDEKA, Aldi Sued, Netto (beide Varianten): liefern ebenfalls 403,
- *    bislang nicht per Headless-Browser probiert.
+ *    Versuch mit echtem Headless-Chrome (puppeteer-core + @sparticuz/
+ *    chromium) gemacht - technisch kein Bot-Bypass (echter Chrome-Prozess),
+ *    aber auf Render's 512-MB-Gratis-Tier stuerzte der gesamte Server dabei
+ *    wiederholt mit Out-of-Memory ab (502). Deshalb bewusst NICHT eingebaut -
+ *    das haette die 3 funktionierenden Scraper mit runtergerissen. Braeuchte
+ *    einen bezahlten Hosting-Plan mit mehr RAM (>=1 GB empfohlen).
+ *  - EDEKA, Aldi Sued, Netto (beide Varianten): liefern ebenfalls 403.
  *  - Penny: Struktur vorhanden, aber kein bestaetigtes Beispiel gefunden,
  *    deshalb nicht eingebaut.
  *  - Alle Preise sind national/online-Prospekt-Daten, nicht filialscharf.
@@ -33,8 +34,6 @@
 import express from "express";
 import fetch from "node-fetch";
 import * as cheerio from "cheerio";
-import puppeteer from "puppeteer-core";
-import chromium from "@sparticuz/chromium";
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -71,66 +70,6 @@ async function geocodeStore(name, city) {
   const p = f.properties;
   const address = [p.name, p.street, p.housenumber, p.postcode, p.city].filter(Boolean).join(", ");
   return { lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0], address };
-}
-
-/* ---------- Scraper: REWE (blockt einfaches HTTP -> echter Headless-Chrome) --- */
-let browserPromise = null;
-async function getBrowser() {
-  if (!browserPromise) {
-    browserPromise = puppeteer.launch({
-      args: chromium.args,
-      executablePath: await chromium.executablePath(),
-      headless: "shell"
-    });
-  }
-  return browserPromise;
-}
-
-async function scrapeRewe(query) {
-  const url = "https://www.rewe.de/angebote/nationale-angebote/alkoholfreie-getraenke/";
-  let browser;
-  try {
-    browser = await getBrowser();
-  } catch (e) {
-    browserPromise = null; // naechster Versuch startet neu
-    throw e;
-  }
-  const page = await browser.newPage();
-  try {
-    await page.setUserAgent(UA);
-    await page.goto(url, { waitUntil: "networkidle2", timeout: 40000 });
-    const items = await page.evaluate(() => {
-      const out = [];
-      document.querySelectorAll("a.cor-offer-information__title-link").forEach((el) => {
-        const label = el.getAttribute("aria-label") || "";
-        if (label) out.push(label);
-      });
-      return out;
-    });
-    const out = [];
-    for (const label of items) {
-      if (!label.toLowerCase().includes(query.toLowerCase())) continue;
-      const m = label.match(/^(.*?),\s*Aktionspreis\s*([\d,]+)\s*€/);
-      if (!m) continue;
-      out.push({
-        storeName: "REWE",
-        product: m[1].trim(),
-        price: parseFloat(m[2].replace(",", ".")),
-        deposit: 0,
-        regularPrice: null,
-        validUntil: "",
-        source: url
-      });
-    }
-    return out;
-  } catch (e) {
-    // Browser koennte abgestuerzt/getrennt sein (RAM-Limit auf Gratis-Hosting) -
-    // beim naechsten Versuch sicherheitshalber neu starten.
-    browserPromise = null;
-    throw e;
-  } finally {
-    await page.close().catch(() => {});
-  }
 }
 
 /* ---------- Scraper: Trinkgut (Shopware, .product-box) ---------- */
@@ -227,7 +166,7 @@ async function scrapeAldiNord(query) {
   })).filter((o) => typeof o.price === "number");
 }
 
-const SCRAPERS = [scrapeRewe, scrapeTrinkgut, scrapeKaufland, scrapeAldiNord];
+const SCRAPERS = [scrapeTrinkgut, scrapeKaufland, scrapeAldiNord];
 
 /* ---------- Endpunkt ---------- */
 app.get("/offers", async (req, res) => {
@@ -250,17 +189,11 @@ app.get("/offers", async (req, res) => {
     }
 
     const settled = await Promise.allSettled(SCRAPERS.map((fn) => fn(brandQuery)));
-    const errors = [];
     const raw = settled.flatMap((r, i) => {
       if (r.status === "fulfilled") return r.value;
-      const msg = r.reason?.stack || r.reason?.message || String(r.reason);
-      console.error(`Scraper ${SCRAPERS[i].name} failed:`, msg);
-      errors.push(`${SCRAPERS[i].name}: ${msg}`);
+      console.error(`Scraper ${SCRAPERS[i].name} failed:`, r.reason?.message || r.reason);
       return [];
     });
-    if (req.query.debug === "1") {
-      return res.json({ raw, errors });
-    }
 
     const offers = [];
     for (const [i, o] of raw.entries()) {
