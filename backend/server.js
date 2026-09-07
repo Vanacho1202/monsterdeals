@@ -150,7 +150,7 @@ async function scrapeTrinkgut(query) {
     const imgSrc = $(el).find("img").attr("src") || "";
     out.push({
       storeName: "Trinkgut",
-      product: name,
+      product: `${name} (Einzeldose)`,
       price,
       deposit: /dpg/i.test(imgSrc) ? 0.25 : 0,
       regularPrice: null,
@@ -184,7 +184,7 @@ async function scrapeKaufland(query) {
     const regularPrice = oldPriceText ? parseFloat(oldPriceText) : null;
     out.push({
       storeName: "Kaufland",
-      product: name,
+      product: `${name} (Einzeldose)`,
       price,
       deposit: 0,
       regularPrice: Number.isNaN(regularPrice) ? null : regularPrice,
@@ -233,7 +233,9 @@ async function scrapeAldiNord(query) {
     const pricePerCan = isPerLiter ? Math.round(basePrice.basePriceValue * CAN_LITERS * 100) / 100 : null;
     const totalPrice = p.currentPrice?.priceValue ?? null;
     const isMultipack = isPerLiter && totalPrice != null && totalPrice / basePrice.basePriceValue > CAN_LITERS + 0.05;
-    const packNote = isMultipack ? ` (aus ${totalPrice.toFixed(2)} EUR Multipack umgerechnet)` : "";
+    const packNote = isMultipack
+      ? ` (aus ${totalPrice.toFixed(2)} EUR Multipack umgerechnet, Angebot gilt nur fuer die ganze Packung)`
+      : " (Einzeldose)";
     return {
       storeName: "Aldi Nord",
       product: `${p.brandName} ${p.shortDescription || p.name || ""}`.trim() + packNote,
@@ -303,7 +305,9 @@ async function scrapeMeinprospekt(query) {
       ? Math.round(unitPricePerLiter * CAN_LITERS * 100) / 100
       : null;
     const isMultipack = pricePerCan != null && Math.abs(totalPrice - pricePerCan) > 0.05;
-    const packNote = isMultipack ? ` (aus ${totalPrice.toFixed(2)} EUR Mehrfachpackung umgerechnet)` : "";
+    const packNote = isMultipack
+      ? ` (aus ${totalPrice.toFixed(2)} EUR Mehrfachpackung umgerechnet, Angebot gilt nur fuer die ganze Packung)`
+      : " (Einzeldose)";
     out.push({
       storeName,
       product: ([brand, productType].filter(Boolean).join(" ") || "Monster Energy") + packNote,
