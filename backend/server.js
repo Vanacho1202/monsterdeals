@@ -12,18 +12,16 @@
  *  4. Ergebnis wird 6 Stunden gecacht
  *
  * Abdeckung / bekannte Einschraenkungen:
- *  - Aldi Nord, Trinkgut, Kaufland: funktionieren (server-gerenderte Seiten
- *    mit brauchbarer Struktur, siehe scrapeX() unten)
- *  - REWE: blockt einfache HTTP-Requests (node-fetch UND Node's natives
- *    https-Modul) mit 403, obwohl derselbe Request per curl durchgeht -
- *    TLS-Fingerprinting (Akamai o.ae.), keine Sache der HTTP-Header.
- *    Versuch mit echtem Headless-Chrome (puppeteer-core + @sparticuz/
- *    chromium) gemacht - technisch kein Bot-Bypass (echter Chrome-Prozess),
- *    aber auf Render's 512-MB-Gratis-Tier stuerzte der gesamte Server dabei
- *    wiederholt mit Out-of-Memory ab (502). Deshalb bewusst NICHT eingebaut -
- *    das haette die 3 funktionierenden Scraper mit runtergerissen. Braeuchte
- *    einen bezahlten Hosting-Plan mit mehr RAM (>=1 GB empfohlen).
- *  - EDEKA, Aldi Sued, Netto (beide Varianten): liefern ebenfalls 403.
+ *  - REWE, Aldi Nord, Trinkgut, Kaufland: funktionieren
+ *  - REWE blockt node-fetch UND Node's natives https-Modul mit 403
+ *    (TLS-Fingerprinting, vermutlich Akamai), curl kommt aber durch -
+ *    deshalb ruft scrapeRewe() das curl-Binary als Subprozess auf statt
+ *    node-fetch zu nutzen (fetchHtmlViaCurl). Ein zuvor versuchter echter
+ *    Headless-Chrome (puppeteer-core + @sparticuz/chromium) hat auf
+ *    Render's 512-MB-Gratis-Tier den gesamten Server mit Out-of-Memory
+ *    abgeschossen - der curl-Subprozess braucht dagegen kaum RAM.
+ *  - EDEKA, Aldi Sued, Netto (beide Varianten): liefern 403, auch mit curl
+ *    nicht probiert.
  *  - Penny: Struktur vorhanden, aber kein bestaetigtes Beispiel gefunden,
  *    deshalb nicht eingebaut.
  *  - Alle Preise sind national/online-Prospekt-Daten, nicht filialscharf.
@@ -34,6 +32,10 @@
 import express from "express";
 import fetch from "node-fetch";
 import * as cheerio from "cheerio";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -46,6 +48,22 @@ async function fetchHtml(url) {
   const r = await fetch(url, { headers: { "User-Agent": UA, "Accept-Language": "de-DE,de;q=0.9" } });
   if (!r.ok) throw new Error(`${url} -> HTTP ${r.status}`);
   return r.text();
+}
+
+/**
+ * Manche Seiten (REWE) blocken node-fetch/Node's https-Modul per TLS-
+ * Fingerprinting, lassen curl aber durch (anderer TLS-Stack). Ruft das
+ * echte curl-Binary als Subprozess auf - kein Fake, kein Bot-Bypass,
+ * sondern dasselbe Tool, das schon nachweislich funktioniert. Braucht
+ * kaum RAM im Gegensatz zu einem echten Browser.
+ */
+async function fetchHtmlViaCurl(url) {
+  const { stdout } = await execFileAsync(
+    "curl",
+    ["-sL", "-m", "20", "-A", UA, "-H", "Accept-Language: de-DE,de;q=0.9", url],
+    { maxBuffer: 20 * 1024 * 1024, timeout: 25000 }
+  );
+  return stdout;
 }
 
 /* ---------- Geocoding ueber Photon (OSM-basiert) ---------- */
@@ -70,6 +88,30 @@ async function geocodeStore(name, city) {
   const p = f.properties;
   const address = [p.name, p.street, p.housenumber, p.postcode, p.city].filter(Boolean).join(", ");
   return { lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0], address };
+}
+
+/* ---------- Scraper: REWE (blockt node-fetch, curl kommt durch) ---------- */
+async function scrapeRewe(query) {
+  const url = "https://www.rewe.de/angebote/nationale-angebote/alkoholfreie-getraenke/";
+  const html = await fetchHtmlViaCurl(url);
+  const $ = cheerio.load(html);
+  const out = [];
+  $("a.cor-offer-information__title-link").each((_, el) => {
+    const label = $(el).attr("aria-label") || "";
+    if (!label.toLowerCase().includes(query.toLowerCase())) return;
+    const m = label.match(/^(.*?),\s*Aktionspreis\s*([\d,]+)\s*€/);
+    if (!m) return;
+    out.push({
+      storeName: "REWE",
+      product: m[1].trim(),
+      price: parseFloat(m[2].replace(",", ".")),
+      deposit: 0,
+      regularPrice: null,
+      validUntil: "",
+      source: url
+    });
+  });
+  return out;
 }
 
 /* ---------- Scraper: Trinkgut (Shopware, .product-box) ---------- */
@@ -166,7 +208,7 @@ async function scrapeAldiNord(query) {
   })).filter((o) => typeof o.price === "number");
 }
 
-const SCRAPERS = [scrapeTrinkgut, scrapeKaufland, scrapeAldiNord];
+const SCRAPERS = [scrapeRewe, scrapeTrinkgut, scrapeKaufland, scrapeAldiNord];
 
 /* ---------- Endpunkt ---------- */
 app.get("/offers", async (req, res) => {
