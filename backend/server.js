@@ -66,6 +66,14 @@ import * as cheerio from "cheerio";
 
 const app = express();
 const PORT = process.env.PORT || 8080;
+
+// Bisher wurden nur Scraper-FEHLER geloggt - ein erfolgreicher Request war im
+// Log unsichtbar, dadurch liess sich "kommt ueberhaupt eine Anfrage an?" nicht
+// beantworten. Jetzt jede Anfrage knapp mitschreiben.
+app.use((req, _res, next) => {
+  console.log(`${new Date().toISOString()} ${req.method} ${req.originalUrl}`);
+  next();
+});
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
 const cache = new Map();
