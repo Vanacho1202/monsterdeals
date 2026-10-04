@@ -1,11 +1,16 @@
-# Baut bei jedem Push eine debug-APK und legt sie als Artifact ab.
-# Herunterladen: GitHub -> Actions -> letzter Lauf -> Artifacts -> app-debug
+# Baut bei jedem Push eine debug-APK.
+# Fester Download-Link (immer die neueste Version, kein ZIP, kein Actions-Klicken):
+#   https://github.com/Vanacho1202/monsterdeals/releases/latest/download/app-debug.apk
+# Alternativ ueber Artifacts: GitHub -> Actions -> letzter Lauf -> Artifacts -> app-debug
 name: Build APK
 
 on:
   push:
     branches: [ main ]
   workflow_dispatch:
+
+permissions:
+  contents: write   # noetig, damit der Job den "latest"-Release aktualisieren darf
 
 jobs:
   build:
@@ -30,3 +35,15 @@ jobs:
         with:
           name: app-debug
           path: app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Als "latest"-Release veroeffentlichen (fester Download-Link)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Neuester Debug-Build
+          body: |
+            Automatisch gebaut aus Commit ${{ github.sha }}.
+            Vor dem Installieren ggf. erst die alte Version deinstallieren -
+            jeder Build hat einen neuen Debug-Signierschluessel.
+          files: app/build/outputs/apk/debug/app-debug.apk
+          make_latest: true
