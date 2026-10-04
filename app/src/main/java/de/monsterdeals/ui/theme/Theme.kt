@@ -7,8 +7,8 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
-// Kraeftiges Violett als Markenfarbe, warmes Amber fuer Preise/Rabatte -
-// bewusst weit weg von Monster Energys eigenem Schwarz/Neongruen.
+// Kräftiges Violett als Markenfarbe, warmes Amber für Preise/Rabatte -
+// bewusst weit weg von Monster Energys eigenem Schwarz/Neongrün.
 private val Violet80 = Color(0xFFD6C8FF)
 private val Violet60 = Color(0xFF9A7BFF)
 private val Violet40 = Color(0xFF6B3FE0)

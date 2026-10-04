@@ -48,7 +48,7 @@ class OffersViewModel(app: Application) : AndroidViewModel(app) {
                 _state.value = UiState.Error("Standort konnte nicht ermittelt werden.")
                 return@launch
             }
-            // Fuer den periodischen Hintergrund-Check (DealCheckWorker) -
+            // Für den periodischen Hintergrund-Check (DealCheckWorker) -
             // der fragt ohne eigene Standortabfrage einfach diesen
             // zwischengespeicherten Wert ab.
             LastLocation.save(getApplication(), here.lat, here.lon)
@@ -58,8 +58,8 @@ class OffersViewModel(app: Application) : AndroidViewModel(app) {
                 } else {
                     repo.nearbyOffers(here.lat, here.lon, radiusKm)
                 }
-                // Reine Preissortierung reisst Ketten mit mehreren Filialen
-                // auseinander: eine 1 Cent guenstigere, aber 70km entfernte
+                // Reine Preissortierung reißt Ketten mit mehreren Filialen
+                // auseinander: eine 1 Cent günstigere, aber 70km entfernte
                 // Filiale landete vor einer nahen, minimal teureren. Deshalb
                 // Preis und Entfernung kombiniert gewichten (2 Cent "Strafe"
                 // pro Kilometer) statt rein nach Preis zu sortieren.
@@ -75,7 +75,7 @@ class OffersViewModel(app: Application) : AndroidViewModel(app) {
 
     fun permissionDenied() {
         _state.value = UiState.Error(
-            "Ohne Standortfreigabe koennen keine Angebote in deiner Naehe gesucht werden."
+            "Ohne Standortfreigabe können keine Angebote in deiner Nähe gesucht werden."
         )
     }
 }

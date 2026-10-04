@@ -8,10 +8,10 @@ private const val PREFS_NAME = "monsterdeals_prefs"
 /**
  * Letzter bekannter Standort, gespeichert beim erfolgreichen Laden in der
  * App. Der Hintergrund-Check (DealCheckWorker) nutzt diesen zwischen-
- * gespeicherten Wert statt selbst eine Standortabfrage zu starten - dafuer
- * waere sonst die deutlich weitreichendere Berechtigung
- * ACCESS_BACKGROUND_LOCATION noetig. Die Benachrichtigung bezieht sich also
- * auf "in der Naehe von dort, wo die App zuletzt geoeffnet wurde".
+ * gespeicherten Wert statt selbst eine Standortabfrage zu starten - dafür
+ * wäre sonst die deutlich weitreichendere Berechtigung
+ * ACCESS_BACKGROUND_LOCATION nötig. Die Benachrichtigung bezieht sich also
+ * auf "in der Nähe von dort, wo die App zuletzt geöffnet wurde".
  */
 object LastLocation {
     fun save(context: Context, lat: Double, lon: Double) {

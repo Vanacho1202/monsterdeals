@@ -1,7 +1,7 @@
 # Baut bei jedem Push eine debug-APK.
 # Fester Download-Link (immer die neueste Version, kein ZIP, kein Actions-Klicken):
 #   https://github.com/Vanacho1202/monsterdeals/releases/latest/download/app-debug.apk
-# Alternativ ueber Artifacts: GitHub -> Actions -> letzter Lauf -> Artifacts -> app-debug
+# Alternativ über Artifacts: GitHub -> Actions -> letzter Lauf -> Artifacts -> app-debug
 name: Build APK
 
 on:
@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write   # noetig, damit der Job den "latest"-Release aktualisieren darf
+  contents: write   # nötig, damit der Job den "latest"-Release aktualisieren darf
 
 jobs:
   build:
@@ -24,11 +24,11 @@ jobs:
           java-version: '17'
 
       # android-actions/setup-android@v3 versucht neuerdings (seit einem
-      # Runner-Image-Update) unnoetige Extra-Pakete (TV/XR/ARM-Emulator) zu
+      # Runner-Image-Update) unnötige Extra-Pakete (TV/XR/ARM-Emulator) zu
       # installieren und bleibt dabei an einer interaktiven Lizenz-Abfrage
-      # haengen (CI hat kein stdin -> Build bricht ab, bevor ueberhaupt
+      # hängen (CI hat kein stdin -> Build bricht ab, bevor überhaupt
       # gebaut wird). ubuntu-latest hat die Android-SDK-Kommandozeilentools
-      # bereits vorinstalliert; es fehlt nur die Lizenz-Zustimmung fuer
+      # bereits vorinstalliert; es fehlt nur die Lizenz-Zustimmung für
       # Gradle/AGP, um fehlende Pakete (Platform/Build-Tools) selbst
       # nachzuladen - das reicht und ist stabiler als die Action.
       - name: Android-SDK-Lizenzen akzeptieren (ohne interaktive Abfrage)
@@ -38,7 +38,7 @@ jobs:
           echo "d56f5187479451eabf01fb78af6dfcb131a6481e4" >> "$ANDROID_HOME/licenses/android-sdk-license"
           echo "84831b9409646a918e30573bab4c9c91346d8abd" > "$ANDROID_HOME/licenses/android-sdk-preview-license"
 
-      - name: Gradle-Wrapper ausfuehrbar machen
+      - name: Gradle-Wrapper ausführbar machen
         run: chmod +x ./gradlew
 
       - name: Debug-APK bauen
@@ -49,7 +49,7 @@ jobs:
           name: app-debug
           path: app/build/outputs/apk/debug/app-debug.apk
 
-      - name: Als "latest"-Release veroeffentlichen (fester Download-Link)
+      - name: Als "latest"-Release veröffentlichen (fester Download-Link)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
@@ -57,6 +57,6 @@ jobs:
           body: |
             Automatisch gebaut aus Commit ${{ github.sha }}.
             Vor dem Installieren ggf. erst die alte Version deinstallieren -
-            jeder Build hat einen neuen Debug-Signierschluessel.
+            jeder Build hat einen neuen Debug-Signierschlüssel.
           files: app/build/outputs/apk/debug/app-debug.apk
           make_latest: true

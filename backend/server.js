@@ -5,60 +5,60 @@
  *
  * Ablauf:
  *  1. Koordinaten -> Ort/PLZ per Photon (OSM-basiert, https://photon.komoot.io)
- *  2. Direktes Scraping der oeffentlichen Angebotsseiten einzelner Haendler
+ *  2. Direktes Scraping der öffentlichen Angebotsseiten einzelner Händler
  *     (kein LLM, keine Kosten, kein API-Key) nach dem gesuchten Produkt
  *  3. Bis zu 3 nächstgelegene Filialen je Treffer per Photon geokodieren
  *     (geocodeStores), damit die App auch mehrere Filialen derselben
- *     Kette in der Naehe anzeigen kann, nicht nur die naechste
+ *     Kette in der Nähe anzeigen kann, nicht nur die nächste
  *  4. Ergebnis wird 6 Stunden gecacht
  *
- * Abdeckung / bekannte Einschraenkungen:
- *  - Aldi Nord, Trinkgut, Kaufland: direkt von der jeweiligen Haendler-
- *    Seite, funktionieren zuverlaessig.
- *  - scrapeMeinprospekt(): zusaetzlich meinprospekt.de (Prospekt-
- *    Aggregator), Ketten-uebergreifend - zeigt automatisch, welche Kette
+ * Abdeckung / bekannte Einschränkungen:
+ *  - Aldi Nord, Trinkgut, Kaufland: direkt von der jeweiligen Händler-
+ *    Seite, funktionieren zuverlässig.
+ *  - scrapeMeinprospekt(): zusätzlich meinprospekt.de (Prospekt-
+ *    Aggregator), Ketten-übergreifend - zeigt automatisch, welche Kette
  *    diese Woche Monster Energy im Prospekt hat (z.B. Lidl, Penny, ggf.
  *    auch REWE, EDEKA etc., je nachdem wer aktuell ein Angebot hat). Als
- *    SEO-Seite ohne aggressiven Bot-Schutz, kein curl/Browser noetig.
- *  - REWE/EDEKA/Aldi Sued/Netto DIREKT (auf deren eigener Seite) sind NICHT
+ *    SEO-Seite ohne aggressiven Bot-Schutz, kein curl/Browser nötig.
+ *  - REWE/EDEKA/Aldi Süd/Netto DIREKT (auf deren eigener Seite) sind NICHT
  *    eingebaut: liefern 403 (Bot-Schutz) bzw. bei REWE liefert selbst curl
  *    von jedem getesteten Render-Standort (Oregon UND Frankfurt) nur die
  *    generische Homepage statt der Angebotsseite - also eine IP-Bereich-
  *    Sperre gegen Cloud-Hosting generell, keine Geo-Sperre. Ein echter Fix
- *    (Proxy mit Residential-IP o.ae.) waere ein aktiver Bot-Erkennungs-
- *    Bypass und wurde deshalb bewusst nicht gebaut. Diese Ketten koennen
+ *    (Proxy mit Residential-IP o.ä.) wäre ein aktiver Bot-Erkennungs-
+ *    Bypass und wurde deshalb bewusst nicht gebaut. Diese Ketten können
  *    aber trotzdem über scrapeMeinprospekt() auftauchen, sobald sie dort
  *    ein Angebot haben.
  *    (Ein zuvor versuchter echter Headless-Chrome via puppeteer-core +
- *    @sparticuz/chromium haette zusaetzlich Render's 512-MB-Gratis-Tier
+ *    @sparticuz/chromium hätte zusätzlich Render's 512-MB-Gratis-Tier
  *    mit Out-of-Memory abgeschossen.)
  *  - Alle Preise sind national/online-Prospekt-Daten, nicht filialscharf.
- *    Die Distanz bezieht sich auf die naechste per Photon gefundene
- *    Filiale der Kette, nicht auf den tatsaechlichen Angebotsort.
+ *    Die Distanz bezieht sich auf die nächste per Photon gefundene
+ *    Filiale der Kette, nicht auf den tatsächlichen Angebotsort.
  *  - Bricht potenziell, wenn eine Seite ihr Layout umbaut.
  *
- * Laender (COUNTRIES weiter unten):
+ * Länder (COUNTRIES weiter unten):
  *  - Das Land kommt aus der Photon-Geokodierung der Nutzerposition. Je Land
  *    gibt es eigene Scraper, eigene Filial-Suche (nur Filialen im selben
- *    Land) und einen eigenen Cache-Schluessel.
+ *    Land) und einen eigenen Cache-Schlüssel.
  *  - DE: wie bisher.
  *  - IT (Florenz usw.): zwei Prospekt-Aggregatoren, die dem Server echte
  *    Seiten liefern: volantinofacile.it (Kategorie "Energy drink", u.a.
  *    Conad/Interspar) und tutti-sconti.it (Produktseite "Monster Energy", u.a.
- *    Coop/Eurospar/Carrefour). Nur aktuell gueltige Angebote mit Preis werden
- *    uebernommen. offertevolantini.it sperrt Cloud-Server (leere HTTP-202-
+ *    Coop/Eurospar/Carrefour). Nur aktuell gültige Angebote mit Preis werden
+ *    übernommen. offertevolantini.it sperrt Cloud-Server (leere HTTP-202-
  *    Antwort) und ist deshalb nicht dabei. Unter /debug/it sieht man je
  *    Scraper, was gefunden wurde.
  *  - Kein Einwegpfand in Italien -> deposit: 0.
- *  - FR, NL, PL, PT, BE, AT, CZ, DK, GR, HU, SK, SE: je 1 Quelle ueber
+ *  - FR, NL, PL, PT, BE, AT, CZ, DK, GR, HU, SK, SE: je 1 Quelle über
  *    tiendeo.<tld> (ShopFully-Netzwerk, dieselbe Plattform wie
  *    volantinofacile.it/IT, siehe scrapeTiendeo()). Live mit echten
  *    Energy-Drink-Treffern verifiziert, deckt pro Land mehrere Ketten ab.
- *    Naechster Ausbauschritt: zweite, unabhaengige Quelle pro Land.
- *  - Preise sind NICHT automatisch Euro - jedes Angebot traegt ein eigenes
+ *    Nächster Ausbauschritt: zweite, unabhängige Quelle pro Land.
+ *  - Preise sind NICHT automatisch Euro - jedes Angebot trägt ein eigenes
  *    "currency"-Feld (ISO-Code, z.B. PLN/CZK/HUF/DKK/SEK), die App zeigt das
- *    passende Symbol/Kuerzel an statt blind "€" zu unterstellen.
- *  - Nicht unterstuetzte Laender liefern eine leere Liste.
+ *    passende Symbol/Kürzel an statt blind "€" zu unterstellen.
+ *  - Nicht unterstützte Länder liefern eine leere Liste.
  */
 import express from "express";
 import fetch from "node-fetch";
@@ -68,7 +68,7 @@ const app = express();
 const PORT = process.env.PORT || 8080;
 
 // Bisher wurden nur Scraper-FEHLER geloggt - ein erfolgreicher Request war im
-// Log unsichtbar, dadurch liess sich "kommt ueberhaupt eine Anfrage an?" nicht
+// Log unsichtbar, dadurch ließ sich "kommt überhaupt eine Anfrage an?" nicht
 // beantworten. Jetzt jede Anfrage knapp mitschreiben.
 app.use((req, _res, next) => {
   console.log(`${new Date().toISOString()} ${req.method} ${req.originalUrl}`);
@@ -102,7 +102,7 @@ function haversineKm(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-/* ---------- Geocoding ueber Photon (OSM-basiert) ---------- */
+/* ---------- Geocoding über Photon (OSM-basiert) ---------- */
 async function reverseGeocode(lat, lon) {
   const url = `https://photon.komoot.io/reverse?lat=${lat}&lon=${lon}`;
   const r = await fetch(url, { headers: { "User-Agent": UA } });
@@ -116,19 +116,19 @@ async function reverseGeocode(lat, lon) {
 }
 
 /**
- * Findet die naechsten Filialen einer Kette (nicht nur eine). Gibt bis zu
- * maxResults Stueck zurueck, sortiert nach Entfernung, jede innerhalb von
+ * Findet die nächsten Filialen einer Kette (nicht nur eine). Gibt bis zu
+ * maxResults Stück zurück, sortiert nach Entfernung, jede innerhalb von
  * maxKm - damit z.B. "Penny" nicht nur eine, sondern mehrere Filialen in
- * der Naehe zeigt, falls es dort mehrere gibt.
+ * der Nähe zeigt, falls es dort mehrere gibt.
  */
 async function geocodeStores(name, nearLat, nearLon, maxResults = 3, maxKm = 100, countryCode = "DE", osmTag = "") {
   // NUR den Kettennamen suchen, ohne Stadt im Suchtext: Photons Textsuche
-  // kombiniert "Kette, kleiner Ort" oft schlecht (fand z.B. fuer "Lidl,
-  // Amoeneburg" NICHTS, obwohl "Lidl" allein + lat/lon-Gewichtung sofort
+  // kombiniert "Kette, kleiner Ort" oft schlecht (fand z.B. für "Lidl,
+  // Amöneburg" NICHTS, obwohl "Lidl" allein + lat/lon-Gewichtung sofort
   // mehrere echte Filialen in 10-25km Entfernung lieferte). lat/lon-
-  // Gewichtung reicht fuer die Naehe-Sortierung voellig aus.
+  // Gewichtung reicht für die Nähe-Sortierung völlig aus.
   const q = encodeURIComponent(name);
-  // osmTag (z.B. "shop") schraenkt auf Laeden ein - noetig fuer kurze Kettennamen
+  // osmTag (z.B. "shop") schränkt auf Läden ein - nötig für kurze Kettennamen
   // wie "MD" oder "Penny", die sonst auch Orte/Personen treffen.
   const tagParam = osmTag ? `&osm_tag=${encodeURIComponent(osmTag)}` : "";
   const url = `https://photon.komoot.io/api/?q=${q}&limit=15&lat=${nearLat}&lon=${nearLon}${tagParam}`;
@@ -150,7 +150,7 @@ async function geocodeStores(name, nearLat, nearLon, maxResults = 3, maxKm = 100
     .filter((c) => c.distanceKm <= maxKm)
     .sort((a, b) => a.distanceKm - b.distanceKm);
   // Duplikate vermeiden (Photon liefert manchmal dieselbe Filiale mehrfach
-  // mit minimal unterschiedlichen Koordinaten, z.B. Eingang vs. Gebaeude).
+  // mit minimal unterschiedlichen Koordinaten, z.B. Eingang vs. Gebäude).
   const seen = new Set();
   const unique = [];
   for (const c of candidates) {
@@ -168,8 +168,8 @@ async function scrapeTrinkgut(query) {
   const url = "https://www.trinkgut.de/angebote";
   const html = await fetchHtml(url);
   const $ = cheerio.load(html);
-  // Seitenweite Gueltigkeit, gilt fuer alle Angebote auf der Seite:
-  // "Gueltig vom 07.09.2026 bis 12.09.2026"
+  // Seitenweite Gültigkeit, gilt für alle Angebote auf der Seite:
+  // "Gültig vom 07.09.2026 bis 12.09.2026"
   const validMatch = html.match(/[GgÜü]ltig vom \d{2}\.\d{2}\.\d{4} bis (\d{2}\.\d{2}\.\d{4})/);
   const validUntil = validMatch ? validMatch[1] : "";
   const out = [];
@@ -180,7 +180,7 @@ async function scrapeTrinkgut(query) {
     const price = parseFloat(priceText.replace(",", "."));
     if (Number.isNaN(price)) return;
     // Produktbeschreibung ist meist mit "..." abgeschnitten, deshalb Pfand
-    // stattdessen am Bild-Dateinamen erkennen (Trinkgut haengt "dpg" an,
+    // stattdessen am Bild-Dateinamen erkennen (Trinkgut hängt "dpg" an,
     // Deutsches Pfandsystem = Einwegpfand-Dose).
     const imgSrc = $(el).find("img").attr("src") || "";
     out.push({
@@ -202,8 +202,8 @@ async function scrapeKaufland(query) {
   const url = "https://filiale.kaufland.de/angebote.html";
   const html = await fetchHtml(url);
   const $ = cheerio.load(html);
-  // "Gueltig vom 03.09. bis 09.09." - ohne Jahr, deshalb aktuelles Jahr
-  // ergaenzen (die Seite zeigt immer nur die laufende Angebotswoche).
+  // "Gültig vom 03.09. bis 09.09." - ohne Jahr, deshalb aktuelles Jahr
+  // ergänzen (die Seite zeigt immer nur die laufende Angebotswoche).
   const validMatch = html.match(/[GgÜü]ltig vom \d{2}\.\d{2}\. bis (\d{2}\.\d{2}\.)/);
   const validUntil = validMatch ? `${validMatch[1]}${new Date().getFullYear()}` : "";
   const out = [];
@@ -258,10 +258,10 @@ async function scrapeAldiNord(query) {
   const catalog = typeof apiDataRaw === "string" ? JSON.parse(apiDataRaw) : apiDataRaw;
   const matches = [];
   findProductsWithBrand(catalog, query, matches);
-  const CAN_LITERS = 0.5; // Standard-Dosengroesse fuer Energy Drinks in DE
+  const CAN_LITERS = 0.5; // Standard-Dosengröße für Energy Drinks in DE
   const CAN_DEPOSIT = 0.25; // Einwegpfand pro Dose
   return matches.map((p) => {
-    // Aldi Nord liefert keine Stueckzahl, nur einen Gesamtpreis (oft ein
+    // Aldi Nord liefert keine Stückzahl, nur einen Gesamtpreis (oft ein
     // Multipack, z.B. 10x0,5l) + Liter-Grundpreis. Auf Dosenpreis umrechnen,
     // damit die Zahl mit den anderen Ketten (Preis pro Dose) vergleichbar
     // ist, statt als "7,77 EUR" wie ein Einzelpreis dazustehen.
@@ -291,7 +291,7 @@ async function scrapeAldiNord(query) {
 /**
  * Scraper: meinprospekt.de (Prospekt-Aggregator)
  *
- * Listet Monster-Energy-Angebote ketten-uebergreifend auf einer festen
+ * Listet Monster-Energy-Angebote ketten-übergreifend auf einer festen
  * Seite - SEO-Seite, deshalb (anders als REWE/EDEKA/Netto direkt) kein
  * aggressiver Bot-Schutz, kommt problemlos durch node-fetch. Deckt damit
  * potenziell auch Ketten ab, die einzeln nicht erreichbar waren (REWE,
@@ -313,9 +313,9 @@ async function scrapeMeinprospekt(query) {
     const m = dateText.match(/(\d{1,2}\.\d{1,2}\.\d{4})\s*$/);
     if (m && !validUntilByChain.has(chain)) validUntilByChain.set(chain, m[1]);
   });
-  // Jede Angebotskarte: <p>Haendler</p><p>Marke</p><p>Produktart</p>, dann
+  // Jede Angebotskarte: <p>Händler</p><p>Marke</p><p>Produktart</p>, dann
   // Preis (.text-primary) und optional Streichpreis (.line-through).
-  const CAN_LITERS = 0.5; // Standard-Dosengroesse fuer Energy Drinks in DE
+  const CAN_LITERS = 0.5; // Standard-Dosengröße für Energy Drinks in DE
   $("#OfferGrid [role=\"listitem\"]").each((_, el) => {
     const ps = $(el).find("p");
     const storeName = $(ps.get(0)).text().trim();
@@ -327,11 +327,11 @@ async function scrapeMeinprospekt(query) {
     const oldPriceText = $(el).find(".line-through").first().text().trim();
     const regularPrice = oldPriceText ? parseFloat(oldPriceText.replace(",", ".")) : null;
     // Jede Karte hat eine Grundpreis-Notiz wie "(1 l = 1.78)". Das ist der
-    // Gesamtpreis geteilt durch die tatsaechliche Packungsgroesse in Litern -
-    // damit laesst sich ein echter Dosenpreis berechnen, auch fuer
+    // Gesamtpreis geteilt durch die tatsächliche Packungsgröße in Litern -
+    // damit lässt sich ein echter Dosenpreis berechnen, auch für
     // Mehrfachpackungen, statt nur zu vermuten/zu warnen. Getestet: bei
     // bereits als Einzeldose ausgezeichneten Angeboten (Lidl) ergibt das
-    // exakt den angezeigten Preis zurueck.
+    // exakt den angezeigten Preis zurück.
     let unitPriceText = "";
     $(el).find("p").each((_, p) => {
       const t = $(p).text().trim();
@@ -342,9 +342,9 @@ async function scrapeMeinprospekt(query) {
     const pricePerCan = unitPricePerLiter != null && !Number.isNaN(unitPricePerLiter)
       ? Math.round(unitPricePerLiter * CAN_LITERS * 100) / 100
       : null;
-    // Ohne Grundpreis-Notiz ("1 l = ...") laesst sich Einzeldose vs.
-    // Mehrfachpack nicht wirklich pruefen - dann NICHT stillschweigend
-    // "Einzeldose" behaupten (waere geraten, nicht erkannt), sondern
+    // Ohne Grundpreis-Notiz ("1 l = ...") lässt sich Einzeldose vs.
+    // Mehrfachpack nicht wirklich prüfen - dann NICHT stillschweigend
+    // "Einzeldose" behaupten (wäre geraten, nicht erkannt), sondern
     // ehrlich als unklar kennzeichnen.
     const isMultipack = pricePerCan != null && Math.abs(totalPrice - pricePerCan) > 0.05;
     const packInfo =
@@ -369,7 +369,7 @@ async function scrapeMeinprospekt(query) {
 
 /* ---------- Italien: volantinofacile.it + tutti-sconti.it ---------- */
 // Hinweis: offertevolantini.it war zuerst die Hauptquelle, liefert an Render-
-// Server aber nur eine leere HTTP-202-Antwort (Bot-Pruefung fuer Cloud-IPs).
+// Server aber nur eine leere HTTP-202-Antwort (Bot-Prüfung für Cloud-IPs).
 // Das wird bewusst NICHT umgangen. Die beiden Quellen unten liefern dem Server
 // echte Seiten.
 const IT_LANG = "it-IT,it;q=0.9";
@@ -406,8 +406,8 @@ function textWithSpaces(node) {
   return parts.join(" ").replace(/\s+/g, " ").trim();
 }
 
-// "30 settembre" -> "2026-09-30". Ohne Jahr: laufendes Jahr, ausser der Monat
-// liegt weit vor dem heutigen (z.B. "5 gennaio" im Dezember -> naechstes Jahr).
+// "30 settembre" -> "2026-09-30". Ohne Jahr: laufendes Jahr, außer der Monat
+// liegt weit vor dem heutigen (z.B. "5 gennaio" im Dezember -> nächstes Jahr).
 function itDayMonthToIso(day, monthName, todayIso) {
   const month = IT_MONTHS[String(monthName).toLowerCase()];
   if (!month) return "";
@@ -416,7 +416,7 @@ function itDayMonthToIso(day, monthName, todayIso) {
   return `${year}-${pad2(month)}-${pad2(day)}`;
 }
 
-// Stueckzahl aus dem Produktnamen, z.B. "4 x 50 cl", "pacco da 4", "6 lattine".
+// Stückzahl aus dem Produktnamen, z.B. "4 x 50 cl", "pacco da 4", "6 lattine".
 // Ohne Hinweis: 1.
 function detectPackCount(name) {
   const n = name.toLowerCase();
@@ -429,9 +429,9 @@ function detectPackCount(name) {
 
 /**
  * Baut ein Angebot im Format der App. Preis pro Dose: nur umrechnen, wenn der
- * Name eine Stueckzahl verraet. Ohne Hinweis ist ein Preis bis 1,99 EUR mit
+ * Name eine Stückzahl verrät. Ohne Hinweis ist ein Preis bis 1,99 EUR mit
  * hoher Sicherheit eine Einzeldose (0,5-l-Dose kostet im Angebot ca.
- * 0,70-1,60 EUR); darueber ist es oft ein 4er-Pack - dann ehrlich als unklar
+ * 0,70-1,60 EUR); darüber ist es oft ein 4er-Pack - dann ehrlich als unklar
  * kennzeichnen statt Einzeldose zu behaupten. Kein Einwegpfand in Italien.
  */
 function buildItOffer({ storeName, name, total, endIso, source }) {
@@ -463,9 +463,9 @@ function buildItOffer({ storeName, name, total, endIso, source }) {
  * Die Seite ist eine Liste von Angebotskarten (Produktname, Kette als
  * Logo-Bild, Preis, "Sfoglia Volantino", "fino al 30 settembre"), gemischt aus
  * Red Bull, Powerade, Monster usw. Weil die genauen CSS-Klassen nicht bekannt
- * sind, wird jede Karte ueber ihren "Sfoglia Volantino"-Link gefunden: vom Link
- * aus geht es nach oben, bis ein Element Preis und "fino al" enthaelt, aber
- * noch nur EINEN dieser Links (sonst waeren zwei Karten vermischt).
+ * sind, wird jede Karte über ihren "Sfoglia Volantino"-Link gefunden: vom Link
+ * aus geht es nach oben, bis ein Element Preis und "fino al" enthält, aber
+ * noch nur EINEN dieser Links (sonst wären zwei Karten vermischt).
  * Grenze: nur die erste Seite ("Carica altri risultati" wird nicht geladen).
  */
 function parseVolantinofacile(html, query, todayIso) {
@@ -515,16 +515,16 @@ async function scrapeVolantinofacileIT(query) {
   const url = "https://www.volantinofacile.it/confronta-prezzi/spesa/acqua-alcolici-bibite/energy-drink";
   const { offers, ctaCount, cards } = parseVolantinofacile(await fetchHtml(url, IT_LANG), query, itTodayIso());
   console.log(`IT volantinofacile: ${ctaCount} Links, ${cards} Karten, ${offers.length} Monster-Angebote`);
-  // Keine einzige Karte erkannt = Layout geaendert oder Sperrseite -> Fehler
+  // Keine einzige Karte erkannt = Layout geändert oder Sperrseite -> Fehler
   // (wird dadurch nicht gecacht und taucht im Log auf).
-  if (cards === 0) throw new Error("volantinofacile.it: keine Angebotskarten erkannt (Layout geaendert?)");
+  if (cards === 0) throw new Error("volantinofacile.it: keine Angebotskarten erkannt (Layout geändert?)");
   return offers;
 }
 
 /**
  * Scraper: tutti-sconti.it, Produktseite "Monster Energy".
  * Jedes Angebot ist ein Link auf /<kette>-offerte/volantino-..., dessen Text
- * Produkt, Kette, "dal 21/9 al 1/10/2026" und Preis ("0,99 EUR") enthaelt.
+ * Produkt, Kette, "dal 21/9 al 1/10/2026" und Preis ("0,99 EUR") enthält.
  * Die Seite zeigt nur Ketten, die diese Woche Monster Energy im Prospekt haben
  * - oft nur wenige.
  */
@@ -547,7 +547,7 @@ function parseTuttiSconti(html, query, todayIso) {
     const endIso = `${endYear}-${pad2(dm[5])}-${pad2(dm[4])}`;
     const startYear = dm[3] ? parseInt(dm[3], 10) : (parseInt(dm[2], 10) > parseInt(dm[5], 10) ? endYear - 1 : endYear);
     const startIso = `${startYear}-${pad2(dm[2])}-${pad2(dm[1])}`;
-    if (startIso > todayIso || endIso < todayIso) return; // nur aktuell gueltig
+    if (startIso > todayIso || endIso < todayIso) return; // nur aktuell gültig
     const alt = ($(a).find("img").first().attr("alt") || "").replace(/^logo\s*-\s*/i, "").trim();
     const storeName = alt || hm[1].replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
     // Text vor "dal ..." ist "<Produkt> <Kette>" - Kette hinten abschneiden
@@ -575,7 +575,7 @@ async function scrapeTuttiScontiIT(query) {
   if (!query.toLowerCase().includes("monster")) return [];
   const url = "https://tutti-sconti.it/prodotti/monster-energy";
   const { offers, links, title } = parseTuttiSconti(await fetchHtml(url, IT_LANG), query, itTodayIso());
-  console.log(`IT tutti-sconti: ${links} Angebotslinks, ${offers.length} gueltige Angebote`);
+  console.log(`IT tutti-sconti: ${links} Angebotslinks, ${offers.length} gültige Angebote`);
   // Ohne Monster im Seitentitel ist es nicht die erwartete Seite (Sperre/Umbau)
   if (!/monster/i.test(title)) throw new Error("tutti-sconti.it: unerwartete Seite (kein Monster im Titel)");
   return offers;
@@ -583,21 +583,21 @@ async function scrapeTuttiScontiIT(query) {
 
 /**
  * Scraper: tiendeo.<tld> (ShopFully-Netzwerk - dieselbe Plattform wie
- * volantinofacile.it fuer Italien, nur mit eigener Landesdomain pro Markt:
+ * volantinofacile.it für Italien, nur mit eigener Landesdomain pro Markt:
  * tiendeo.de, tiendeo.fr, tiendeo.pl, ...). Die Suchergebnisse stecken
  * strukturiert im Next.js __NEXT_DATA__-JSON unter
  * props.pageProps.apiResources.flyerGibsData.flyerGibs - keine
- * HTML-Textextraktion noetig, exakt dieselbe Feldstruktur in jedem Land
- * (live geprueft). Ein Scraper deckt damit auf einen Schlag viele Ketten
- * pro Land ab statt pro Kette einzeln gebaut werden zu muessen - bestaetigt
+ * HTML-Textextraktion nötig, exakt dieselbe Feldstruktur in jedem Land
+ * (live geprüft). Ein Scraper deckt damit auf einen Schlag viele Ketten
+ * pro Land ab statt pro Kette einzeln gebaut werden zu müssen - bestätigt
  * u.a.: Conad/IT, E.Leclerc+Lidl+Metro/FR, Lidl+Dirck III/NL, Biedronka/PL,
- * Auchan+Pingo Doce/PT, Action+SPAR/BE, Lidl/AT, Coop/CZ, Foetex/DK,
+ * Auchan+Pingo Doce/PT, Action+SPAR/BE, Lidl/AT, Coop/CZ, Føtex/DK,
  * Masoutis/GR, Interspar/HU, Kaufland/SK, ICA/SE.
  */
 // round2() ist bereits oben (IT-Abschnitt) definiert.
 
-// Stueckzahl aus der Packungsbeschreibung, sprachunabhaengig ueber Zahlen-
-// Muster statt Woerter (die Seite liefert Beschreibungen in der jeweiligen
+// Stückzahl aus der Packungsbeschreibung, sprachunabhängig über Zahlen-
+// Muster statt Wörter (die Seite liefert Beschreibungen in der jeweiligen
 // Landessprache): "12 x 50 cl", "8x50 cl", "4x0.50l" -> Mehrfachpack-Anzahl.
 // Nur eine einzelne Volumenangabe ("500 ml", "0,5 l", "50 cl") -> Einzeldose.
 // Weder noch (z.B. "3+1 gratis", leer) -> unklar, nicht geraten.
@@ -623,7 +623,7 @@ async function scrapeTiendeo(tld, query) {
   const url = `https://www.tiendeo.${tld}/search?q=${encodeURIComponent(query)}`;
   const $ = cheerio.load(await fetchHtml(url, "en;q=0.9"));
   const raw = $("#__NEXT_DATA__").html();
-  if (!raw) throw new Error(`tiendeo.${tld}: kein __NEXT_DATA__ gefunden (Layout geaendert?)`);
+  if (!raw) throw new Error(`tiendeo.${tld}: kein __NEXT_DATA__ gefunden (Layout geändert?)`);
   const gibs = JSON.parse(raw)?.props?.pageProps?.apiResources?.flyerGibsData?.flyerGibs || [];
   const today = new Date().toISOString().slice(0, 10);
   const out = [];
@@ -633,10 +633,10 @@ async function scrapeTiendeo(tld, query) {
     if (!name || !storeName) continue;
     const nameNorm = stripDiacritics(name.toLowerCase());
     // "Monster" trifft europaweit auch auf andere Produktlinien der Marke
-    // (Monster High Puppen, Monster Munch Chips, u.ae.) - zusaetzlich zum
+    // (Monster High Puppen, Monster Munch Chips, u.ä.) - zusätzlich zum
     // Markennamen muss "energ" vorkommen (Energy/énergie/energético/
     // energetický/energiaital/... - in den meisten EU-Sprachen ein
-    // gemeinsamer Wortstamm), sonst waeren das falsche Treffer.
+    // gemeinsamer Wortstamm), sonst wären das falsche Treffer.
     if (!nameNorm.includes(query.toLowerCase()) || !nameNorm.includes("energ")) continue;
     const digits = g.settings?.price_extended?.digits;
     const total = digits != null ? parseFloat(String(digits).replace(",", ".")) : NaN;
@@ -660,8 +660,8 @@ async function scrapeTiendeo(tld, query) {
       product: name,
       packInfo,
       price,
-      // Pfandsysteme unterscheiden sich stark zwischen Laendern und stehen
-      // nicht zuverlaessig in den Daten - ehrlich 0 statt geraten, ausser der
+      // Pfandsysteme unterscheiden sich stark zwischen Ländern und stehen
+      // nicht zuverlässig in den Daten - ehrlich 0 statt geraten, außer der
       // Text nennt es explizit (DE: fast immer "zzgl. ... Pfand").
       deposit: /pfand/i.test(g.description || "") ? 0.25 : 0,
       regularPrice: null,
@@ -682,24 +682,24 @@ function makeTiendeoScraper(tld) {
 const SCRAPERS_DE = [scrapeTrinkgut, scrapeKaufland, scrapeAldiNord, scrapeMeinprospekt, makeTiendeoScraper("de")];
 const SCRAPERS_IT = [scrapeVolantinofacileIT, scrapeTuttiScontiIT, makeTiendeoScraper("it")];
 
-// Je Land: Scraper + Filialsuche. storeOsmTag "" = keine Einschraenkung (wie
-// bisher in DE), "shop" = nur Laeden (kurze Kettennamen wie "MD"/"SPAR"
+// Je Land: Scraper + Filialsuche. storeOsmTag "" = keine Einschränkung (wie
+// bisher in DE), "shop" = nur Läden (kurze Kettennamen wie "MD"/"SPAR"
 // treffen sonst auch Orte/Personen).
 const COUNTRIES = {
   DE: { scrapers: SCRAPERS_DE, storeOsmTag: "" },
   IT: { scrapers: SCRAPERS_IT, storeOsmTag: "shop" }
 };
 
-// Weitere EU-Laender, bisher nur ueber tiendeo abgedeckt (1 Quelle statt wie
+// Weitere EU-Länder, bisher nur über tiendeo abgedeckt (1 Quelle statt wie
 // DE/IT mehrere) - live mit echten Monster-Energy-Treffern verifiziert.
-// Naechster Ausbauschritt: pro Land eine zweite, unabhaengige Quelle finden.
+// Nächster Ausbauschritt: pro Land eine zweite, unabhängige Quelle finden.
 for (const cc of ["FR", "NL", "PL", "PT", "BE", "AT", "CZ", "DK", "GR", "HU", "SK", "SE"]) {
   COUNTRIES[cc] = { scrapers: [makeTiendeoScraper(cc.toLowerCase())], storeOsmTag: "shop" };
 }
 
-// Scraper-Ergebnisse sind nicht ortsabhaengig (nationale Prospektdaten) und
+// Scraper-Ergebnisse sind nicht ortsabhängig (nationale Prospektdaten) und
 // werden deshalb einmal pro Scraper 6 h gecacht statt pro Stadt neu geladen -
-// wichtig fuer Italien mit vielen Einzelseiten. Fehler werden nicht gecacht.
+// wichtig für Italien mit vielen Einzelseiten. Fehler werden nicht gecacht.
 const scrapeCache = new Map();
 async function cachedScrape(fn, query) {
   const key = `${fn.name}|${query}`;
@@ -710,7 +710,7 @@ async function cachedScrape(fn, query) {
   return offers;
 }
 
-// Obergrenze fuer Filial-Suchen pro Anfrage (Photon ist ein oeffentlicher Dienst)
+// Obergrenze für Filial-Suchen pro Anfrage (Photon ist ein öffentlicher Dienst)
 const MAX_GEOCODED_STORES = 30;
 
 /* ---------- Endpunkt ---------- */
@@ -729,7 +729,7 @@ app.get("/offers", async (req, res) => {
     // Ohne erkanntes Land (Photon liefert nichts) wie bisher Deutschland annehmen
     const country = place.countryCode || "DE";
     const cfg = COUNTRIES[country];
-    if (!cfg) return res.json([]); // Land (noch) nicht unterstuetzt
+    if (!cfg) return res.json([]); // Land (noch) nicht unterstützt
     const key = `${country}|${place.city}|${brandQuery}`;
 
     const hit = cache.get(key);
@@ -746,8 +746,8 @@ app.get("/offers", async (req, res) => {
 
     // Filialen je Kette nur einmal pro Anfrage suchen (mehrere Angebote
     // derselben Kette teilen sich das Ergebnis). Bis zu 3 Filialen je Kette,
-    // Distanz-Filter (>100km) und Laenderfilter stecken in geocodeStores().
-    // Faellt eine Suche aus, verliert nur diese Kette ihre Filialen.
+    // Distanz-Filter (>100km) und Länderfilter stecken in geocodeStores().
+    // Fällt eine Suche aus, verliert nur diese Kette ihre Filialen.
     const branchMemo = new Map();
     const offers = [];
     for (const [i, o] of raw.entries()) {
@@ -761,10 +761,10 @@ app.get("/offers", async (req, res) => {
           branches = [];
         }
         branchMemo.set(o.storeName, branches);
-        await new Promise((r) => setTimeout(r, 300)); // hoeflicher Abstand zwischen Anfragen
+        await new Promise((r) => setTimeout(r, 300)); // höflicher Abstand zwischen Anfragen
       }
       branches.forEach((geo, j) => {
-        // currency-Fallback fuer die aelteren DE/IT-Scraper, die das Feld noch
+        // currency-Fallback für die älteren DE/IT-Scraper, die das Feld noch
         // nicht selbst setzen (die waren immer EUR, nie etwas anderes).
         offers.push({
           id: `${key}-${i}-${j}`,
@@ -777,7 +777,7 @@ app.get("/offers", async (req, res) => {
       });
     }
 
-    // Nur cachen, wenn mindestens ein Scraper geklappt hat - sonst wuerde ein
+    // Nur cachen, wenn mindestens ein Scraper geklappt hat - sonst würde ein
     // kurzer Ausfall 6 Stunden lang eine leere Liste festhalten.
     if (settled.some((r) => r.status === "fulfilled")) cache.set(key, { time: Date.now(), offers });
     res.json(offers);
@@ -788,7 +788,7 @@ app.get("/offers", async (req, res) => {
 });
 
 // Zeigt je italienischem Scraper, was er gefunden hat (nutzt den 6-h-Cache,
-// loest also hoechstens alle 6 h einen echten Scrape aus).
+// löst also höchstens alle 6 h einen echten Scrape aus).
 app.get("/debug/it", async (_, res) => {
   const result = {};
   for (const fn of SCRAPERS_IT) {
@@ -804,8 +804,8 @@ app.get("/debug/it", async (_, res) => {
 
 // Diagnose: Was liefern die italienischen Quellen an DIESEN Server? Manche
 // Seiten geben Cloud-IPs (Render) anderen Inhalt als einem normalen Browser.
-// Feste Liste, keine frei waehlbare URL. Ausgabe als Text (handy-tauglich),
-// Ergebnis 10 Minuten gemerkt, damit ein Aufruf nicht jedes Mal alle Seiten laedt.
+// Feste Liste, keine frei wählbare URL. Ausgabe als Text (handy-tauglich),
+// Ergebnis 10 Minuten gemerkt, damit ein Aufruf nicht jedes Mal alle Seiten lädt.
 // euroLinks = Links, in deren Text ein Preis (EUR-Zeichen) steht; sample = Text
 // des ersten - zeigt, wie eine Angebotskarte aufgebaut ist.
 const IT_DEBUG_SOURCES = [
@@ -854,4 +854,4 @@ app.get("/debug/sources", async (_, res) => {
 });
 
 app.get("/health", (_, res) => res.send("ok"));
-app.listen(PORT, () => console.log(`laeuft auf :${PORT}`));
+app.listen(PORT, () => console.log(`läuft auf :${PORT}`));

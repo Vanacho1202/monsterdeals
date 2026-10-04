@@ -43,7 +43,7 @@ fun OffersScreen(
                         val subtitle = (state as? UiState.Ready)?.offers?.size
                         if (subtitle != null) {
                             Text(
-                                if (subtitle == 1) "1 Angebot in der Naehe" else "$subtitle Angebote in der Naehe",
+                                if (subtitle == 1) "1 Angebot in der Nähe" else "$subtitle Angebote in der Nähe",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -72,7 +72,7 @@ fun OffersScreen(
                     is UiState.AskingPermissions -> CenteredMessage(
                         icon = Icons.Default.LocationOn,
                         title = "Standort wird abgefragt",
-                        subtitle = "Erlaube den Zugriff, um Angebote in deiner Naehe zu finden."
+                        subtitle = "Erlaube den Zugriff, um Angebote in deiner Nähe zu finden."
                     )
 
                     is UiState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -91,7 +91,7 @@ fun OffersScreen(
                             CenteredMessage(
                                 icon = Icons.Default.Search,
                                 title = "Nichts gefunden",
-                                subtitle = "Aktuell kein Monster-Energy-Angebot in deiner Naehe.",
+                                subtitle = "Aktuell kein Monster-Energy-Angebot in deiner Nähe.",
                                 action = { OutlinedButton(onClick = onRetry) { Text("Erneut versuchen") } }
                             )
                         } else {
@@ -242,7 +242,7 @@ private fun OfferCard(offer: Offer, here: LatLon) {
     }
 }
 
-/** Farbiger Kreis mit dem Anfangsbuchstaben der Kette - Platzhalter fuer ein echtes Logo. */
+/** Farbiger Kreis mit dem Anfangsbuchstaben der Kette - Platzhalter für ein echtes Logo. */
 @Composable
 private fun StoreBadge(storeName: String) {
     Box(

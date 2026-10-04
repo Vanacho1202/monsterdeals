@@ -14,9 +14,9 @@ object Notifications {
     fun createChannel(context: Context) {
         val channel = NotificationChannel(
             CHANNEL_ID,
-            "Angebote in der Naehe",
+            "Angebote in der Nähe",
             NotificationManager.IMPORTANCE_DEFAULT
-        ).apply { description = "Meldung, wenn ein guenstiges Angebot in der Naehe ist" }
+        ).apply { description = "Meldung, wenn ein günstiges Angebot in der Nähe ist" }
         context.getSystemService(NotificationManager::class.java)
             .createNotificationChannel(channel)
     }
@@ -25,7 +25,7 @@ object Notifications {
     fun showDeal(context: Context, offer: Offer, distanceKm: Double) {
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentTitle(String.format("%.2f EUR bei %s", offer.price, offer.storeName))
+            .setContentTitle(String.format("%.2f %s bei %s", offer.price, offer.currencyLabel, offer.storeName))
             .setContentText(String.format("%s - %.1f km entfernt", offer.product, distanceKm))
             .setAutoCancel(true)
             .build()

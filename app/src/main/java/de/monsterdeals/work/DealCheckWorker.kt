@@ -10,7 +10,7 @@ import de.monsterdeals.prefs.NotifiedOffers
 
 /**
  * Periodischer Hintergrund-Check (siehe WorkScheduler): fragt das Backend
- * fuer den zuletzt bekannten Standort ab und benachrichtigt nur ueber
+ * für den zuletzt bekannten Standort ab und benachrichtigt nur über
  * Angebote, die seit dem letzten Check neu dazugekommen sind.
  */
 class DealCheckWorker(

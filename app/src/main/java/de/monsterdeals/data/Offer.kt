@@ -12,16 +12,16 @@ data class Offer(
                                  // eigenes Feld statt Teil von "product", damit es
                                  // bei langen Produktnamen nicht abgeschnitten wird
     val price: Double,           // Angebotspreis, OHNE Pfand
-    val deposit: Double = 0.0,   // Pfand in derselben Waehrung, separat an der Kasse faellig
+    val deposit: Double = 0.0,   // Pfand in derselben Währung, separat an der Kasse fällig
     val regularPrice: Double?,   // Normalpreis, falls bekannt
     val validUntil: String,      // ISO-Datum
     val lat: Double,
     val lon: Double,
     val currency: String = "EUR", // ISO-Code, z.B. "EUR"/"PLN"/"CZK"/"HUF"/"DKK"/"SEK" -
                                    // nicht jedes Land in der App nutzt Euro, nie annehmen
-    val source: String = ""   // Fundstelle im Web, Angabe ohne Gewaehr
+    val source: String = ""   // Fundstelle im Web, Angabe ohne Gewähr
 ) {
-    /** Entfernung in km zum uebergebenen Punkt (Haversine). */
+    /** Entfernung in km zum übergebenen Punkt (Haversine). */
     fun distanceKm(fromLat: Double, fromLon: Double): Double {
         val r = 6371.0
         val dLat = Math.toRadians(lat - fromLat)
@@ -35,7 +35,7 @@ data class Offer(
     val savingsPercent: Int?
         get() = regularPrice?.let { (((it - price) / it) * 100).toInt() }
 
-    /** Kurzes Waehrungskuerzel fuer die Anzeige - reine Darstellung, keine Umrechnung. */
+    /** Kurzes Währungskürzel für die Anzeige - reine Darstellung, keine Umrechnung. */
     val currencyLabel: String
         get() = when (currency) {
             "EUR" -> "€"

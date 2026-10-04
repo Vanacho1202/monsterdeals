@@ -11,7 +11,7 @@ import java.util.concurrent.TimeUnit
 object WorkScheduler {
     private const val WORK_NAME = "deal_check"
 
-    /** Alle 6 Stunden pruefen (passend zur Cache-Dauer des Backends). */
+    /** Alle 6 Stunden prüfen (passend zur Cache-Dauer des Backends). */
     fun schedule(context: Context) {
         val request = PeriodicWorkRequestBuilder<DealCheckWorker>(6, TimeUnit.HOURS)
             .setConstraints(

@@ -12,9 +12,9 @@ import kotlinx.serialization.json.Json
 /**
  * Holt Angebote vom eigenen Backend.
  *
- * Das Backend macht die eigentliche Arbeit: es haelt eine Tabelle
- * (Laden, Produkt, Preis, Gueltigkeit, Geo-Koordinaten) und liefert per
- * /offers?lat=..&lon=..&radiusKm=.. alles im Umkreis zurueck.
+ * Das Backend macht die eigentliche Arbeit: es hält eine Tabelle
+ * (Laden, Produkt, Preis, Gültigkeit, Geo-Koordinaten) und liefert per
+ * /offers?lat=..&lon=..&radiusKm=.. alles im Umkreis zurück.
  * Datenquelle: Nutzer-Meldungen (Crowdsourcing) oder ein lizenzierter
  * Prospekt-Anbieter. Details im README.
  */
@@ -25,7 +25,7 @@ class OfferRepository(
         install(ContentNegotiation) {
             json(Json { ignoreUnknownKeys = true })
         }
-        // Render (Gratis-Tier) schlaeft nach Inaktivitaet ein und braucht beim
+        // Render (Gratis-Tier) schläft nach Inaktivität ein und braucht beim
         // Aufwachen 30-50s, dazu kommt die Laufzeit der Preissuche selbst.
         install(HttpTimeout) {
             requestTimeoutMillis = 60_000
