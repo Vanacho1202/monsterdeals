@@ -36,6 +36,21 @@
  *    Die Distanz bezieht sich auf die naechste per Photon gefundene
  *    Filiale der Kette, nicht auf den tatsaechlichen Angebotsort.
  *  - Bricht potenziell, wenn eine Seite ihr Layout umbaut.
+ *
+ * Laender (COUNTRIES weiter unten):
+ *  - Das Land kommt aus der Photon-Geokodierung der Nutzerposition. Je Land
+ *    gibt es eigene Scraper, eigene Filial-Suche (nur Filialen im selben
+ *    Land) und einen eigenen Cache-Schluessel.
+ *  - DE: wie bisher.
+ *  - IT (Florenz usw.): zwei Prospekt-Aggregatoren, die dem Server echte
+ *    Seiten liefern: volantinofacile.it (Kategorie "Energy drink", u.a.
+ *    Conad/Interspar) und tutti-sconti.it (Produktseite "Monster Energy", u.a.
+ *    Coop/Eurospar/Carrefour). Nur aktuell gueltige Angebote mit Preis werden
+ *    uebernommen. offertevolantini.it sperrt Cloud-Server (leere HTTP-202-
+ *    Antwort) und ist deshalb nicht dabei. Unter /debug/it sieht man je
+ *    Scraper, was gefunden wurde.
+ *  - Kein Einwegpfand in Italien -> deposit: 0.
+ *  - Nicht unterstuetzte Laender liefern eine leere Liste.
  */
 import express from "express";
 import fetch from "node-fetch";
@@ -48,8 +63,8 @@ const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 const cache = new Map();
 const CACHE_MS = 6 * 60 * 60 * 1000;
 
-async function fetchHtml(url) {
-  const r = await fetch(url, { headers: { "User-Agent": UA, "Accept-Language": "de-DE,de;q=0.9" } });
+async function fetchHtml(url, lang = "de-DE,de;q=0.9") {
+  const r = await fetch(url, { headers: { "User-Agent": UA, "Accept-Language": lang } });
   if (!r.ok) throw new Error(`${url} -> HTTP ${r.status}`);
   return r.text();
 }
@@ -79,7 +94,8 @@ async function reverseGeocode(lat, lon) {
   const p = j.features?.[0]?.properties || {};
   return {
     city: p.city || p.town || p.village || p.district || "",
-    postcode: p.postcode || ""
+    postcode: p.postcode || "",
+    countryCode: (p.countrycode || "").toUpperCase()
   };
 }
 
@@ -89,18 +105,21 @@ async function reverseGeocode(lat, lon) {
  * maxKm - damit z.B. "Penny" nicht nur eine, sondern mehrere Filialen in
  * der Naehe zeigt, falls es dort mehrere gibt.
  */
-async function geocodeStores(name, nearLat, nearLon, maxResults = 3, maxKm = 100) {
+async function geocodeStores(name, nearLat, nearLon, maxResults = 3, maxKm = 100, countryCode = "DE", osmTag = "") {
   // NUR den Kettennamen suchen, ohne Stadt im Suchtext: Photons Textsuche
   // kombiniert "Kette, kleiner Ort" oft schlecht (fand z.B. fuer "Lidl,
   // Amoeneburg" NICHTS, obwohl "Lidl" allein + lat/lon-Gewichtung sofort
   // mehrere echte Filialen in 10-25km Entfernung lieferte). lat/lon-
   // Gewichtung reicht fuer die Naehe-Sortierung voellig aus.
   const q = encodeURIComponent(name);
-  const url = `https://photon.komoot.io/api/?q=${q}&limit=15&lat=${nearLat}&lon=${nearLon}`;
+  // osmTag (z.B. "shop") schraenkt auf Laeden ein - noetig fuer kurze Kettennamen
+  // wie "MD" oder "Penny", die sonst auch Orte/Personen treffen.
+  const tagParam = osmTag ? `&osm_tag=${encodeURIComponent(osmTag)}` : "";
+  const url = `https://photon.komoot.io/api/?q=${q}&limit=15&lat=${nearLat}&lon=${nearLon}${tagParam}`;
   const r = await fetch(url, { headers: { "User-Agent": UA } });
   const j = await r.json();
   const candidates = (j.features || [])
-    .filter((feat) => feat.properties?.countrycode === "DE")
+    .filter((feat) => (feat.properties?.countrycode || "").toUpperCase() === countryCode)
     .map((f) => {
       const p = f.properties;
       const lat = f.geometry.coordinates[1];
@@ -332,7 +351,245 @@ async function scrapeMeinprospekt(query) {
   return out;
 }
 
-const SCRAPERS = [scrapeTrinkgut, scrapeKaufland, scrapeAldiNord, scrapeMeinprospekt];
+/* ---------- Italien: volantinofacile.it + tutti-sconti.it ---------- */
+// Hinweis: offertevolantini.it war zuerst die Hauptquelle, liefert an Render-
+// Server aber nur eine leere HTTP-202-Antwort (Bot-Pruefung fuer Cloud-IPs).
+// Das wird bewusst NICHT umgangen. Die beiden Quellen unten liefern dem Server
+// echte Seiten.
+const IT_LANG = "it-IT,it;q=0.9";
+
+const IT_MONTHS = {
+  gennaio: 1, febbraio: 2, marzo: 3, aprile: 4, maggio: 5, giugno: 6,
+  luglio: 7, agosto: 8, settembre: 9, ottobre: 10, novembre: 11, dicembre: 12
+};
+
+const round2 = (x) => Math.round(x * 100) / 100;
+const pad2 = (n) => String(n).padStart(2, "0");
+
+// Heutiges Datum in Italien als "YYYY-MM-DD"
+function itTodayIso() {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Rome" });
+}
+
+// Text eines Elements MIT Leerzeichen zwischen den Teilen ("MONSTER" + "Eurospar"
+// -> "MONSTER Eurospar"), ohne Script/Style. cheerio's .text() klebt Teile sonst
+// zusammen.
+function textWithSpaces(node) {
+  const parts = [];
+  const walk = (n) => {
+    if (!n) return;
+    if (n.type === "script" || n.type === "style") return;
+    if (n.type === "text") {
+      const t = (n.data || "").trim();
+      if (t) parts.push(t);
+    } else if (n.children) {
+      n.children.forEach(walk);
+    }
+  };
+  walk(node);
+  return parts.join(" ").replace(/\s+/g, " ").trim();
+}
+
+// "30 settembre" -> "2026-09-30". Ohne Jahr: laufendes Jahr, ausser der Monat
+// liegt weit vor dem heutigen (z.B. "5 gennaio" im Dezember -> naechstes Jahr).
+function itDayMonthToIso(day, monthName, todayIso) {
+  const month = IT_MONTHS[String(monthName).toLowerCase()];
+  if (!month) return "";
+  const [ty, tm] = todayIso.split("-").map(Number);
+  const year = tm - month > 6 ? ty + 1 : ty;
+  return `${year}-${pad2(month)}-${pad2(day)}`;
+}
+
+// Stueckzahl aus dem Produktnamen, z.B. "4 x 50 cl", "pacco da 4", "6 lattine".
+// Ohne Hinweis: 1.
+function detectPackCount(name) {
+  const n = name.toLowerCase();
+  let m = n.match(/(\d+)\s*[x×]\s*\d/);
+  if (!m) m = n.match(/(?:pacco|confezione|conf\.?|pack)\s*(?:da\s*)?(\d+)/);
+  if (!m) m = n.match(/(\d+)\s*(?:lattine|pezzi|pz)\b/);
+  const c = m ? parseInt(m[1], 10) : 1;
+  return c >= 2 && c <= 24 ? c : 1;
+}
+
+/**
+ * Baut ein Angebot im Format der App. Preis pro Dose: nur umrechnen, wenn der
+ * Name eine Stueckzahl verraet. Ohne Hinweis ist ein Preis bis 1,99 EUR mit
+ * hoher Sicherheit eine Einzeldose (0,5-l-Dose kostet im Angebot ca.
+ * 0,70-1,60 EUR); darueber ist es oft ein 4er-Pack - dann ehrlich als unklar
+ * kennzeichnen statt Einzeldose zu behaupten. Kein Einwegpfand in Italien.
+ */
+function buildItOffer({ storeName, name, total, endIso, source }) {
+  const count = detectPackCount(name);
+  let price = total;
+  let packInfo;
+  if (count > 1) {
+    price = round2(total / count);
+    packInfo = `Nur im Mehrfachpack (${total.toFixed(2)} EUR gesamt)`;
+  } else if (total <= 1.99) {
+    packInfo = "Einzeldose";
+  } else {
+    packInfo = "Nicht eindeutig erkennbar";
+  }
+  return {
+    storeName,
+    product: name,
+    packInfo,
+    price,
+    deposit: 0,
+    regularPrice: null,
+    validUntil: formatDate(endIso),
+    source
+  };
+}
+
+/**
+ * Scraper: volantinofacile.it, Kategorie "Energy drink" (ShopFully).
+ * Die Seite ist eine Liste von Angebotskarten (Produktname, Kette als
+ * Logo-Bild, Preis, "Sfoglia Volantino", "fino al 30 settembre"), gemischt aus
+ * Red Bull, Powerade, Monster usw. Weil die genauen CSS-Klassen nicht bekannt
+ * sind, wird jede Karte ueber ihren "Sfoglia Volantino"-Link gefunden: vom Link
+ * aus geht es nach oben, bis ein Element Preis und "fino al" enthaelt, aber
+ * noch nur EINEN dieser Links (sonst waeren zwei Karten vermischt).
+ * Grenze: nur die erste Seite ("Carica altri risultati" wird nicht geladen).
+ */
+function parseVolantinofacile(html, query, todayIso) {
+  const $ = cheerio.load(html);
+  const isCta = (_, x) => /sfoglia volantino/i.test($(x).text());
+  const ctas = $("a").filter(isCta).toArray();
+  const offers = [];
+  const seen = new Set();
+  let cards = 0;
+  for (const a of ctas) {
+    let node = $(a).parent();
+    let card = null;
+    for (let depth = 0; depth < 8 && node.length; depth++) {
+      if (node.find("a").filter(isCta).length !== 1) break; // zu weit: mehrere Karten
+      const t = textWithSpaces(node.get(0));
+      if (/fino al/i.test(t) && /\d\s*€/.test(t)) { card = node; break; }
+      node = node.parent();
+    }
+    if (!card) continue;
+    cards++;
+    const t = textWithSpaces(card.get(0));
+    const cut = t.search(/dove lo compro/i);
+    const name = (cut > 0 ? t.slice(0, cut) : card.find("img").first().attr("alt") || "").trim();
+    if (!name.toLowerCase().includes(query.toLowerCase())) continue;
+    if (/munch/i.test(name)) continue;
+    const storeName = (card.find('img[src*="/retailers/"]').first().attr("alt") || "").trim();
+    const pm = t.slice(cut > 0 ? cut : 0).match(/(\d+(?:,\d{1,2})?)\s*€/);
+    const dm = t.match(/fino al\s+(\d{1,2})\s+([a-zà-ú]+)/i);
+    if (!storeName || !pm || !dm) continue;
+    const endIso = itDayMonthToIso(dm[1], dm[2], todayIso);
+    if (!endIso || endIso < todayIso) continue; // abgelaufen
+    const total = parseFloat(pm[1].replace(",", "."));
+    if (Number.isNaN(total)) continue;
+    let source = $(a).attr("href") || "";
+    if (source.startsWith("/")) source = `https://www.volantinofacile.it${source}`;
+    const o = buildItOffer({ storeName, name, total, endIso, source });
+    const k = `${o.storeName}|${o.product}|${o.price}|${o.validUntil}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    offers.push(o);
+  }
+  return { offers, ctaCount: ctas.length, cards };
+}
+
+async function scrapeVolantinofacileIT(query) {
+  if (!query.toLowerCase().includes("monster")) return [];
+  const url = "https://www.volantinofacile.it/confronta-prezzi/spesa/acqua-alcolici-bibite/energy-drink";
+  const { offers, ctaCount, cards } = parseVolantinofacile(await fetchHtml(url, IT_LANG), query, itTodayIso());
+  console.log(`IT volantinofacile: ${ctaCount} Links, ${cards} Karten, ${offers.length} Monster-Angebote`);
+  // Keine einzige Karte erkannt = Layout geaendert oder Sperrseite -> Fehler
+  // (wird dadurch nicht gecacht und taucht im Log auf).
+  if (cards === 0) throw new Error("volantinofacile.it: keine Angebotskarten erkannt (Layout geaendert?)");
+  return offers;
+}
+
+/**
+ * Scraper: tutti-sconti.it, Produktseite "Monster Energy".
+ * Jedes Angebot ist ein Link auf /<kette>-offerte/volantino-..., dessen Text
+ * Produkt, Kette, "dal 21/9 al 1/10/2026" und Preis ("0,99 EUR") enthaelt.
+ * Die Seite zeigt nur Ketten, die diese Woche Monster Energy im Prospekt haben
+ * - oft nur wenige.
+ */
+function parseTuttiSconti(html, query, todayIso) {
+  const $ = cheerio.load(html);
+  const offers = [];
+  const seen = new Set();
+  let links = 0;
+  $("a").each((_, a) => {
+    const href = $(a).attr("href") || "";
+    const hm = href.match(/^(?:https?:\/\/(?:www\.)?tutti-sconti\.it)?\/([a-z0-9-]+)-offerte\/volantino-/i);
+    if (!hm) return;
+    links++;
+    const text = textWithSpaces(a);
+    const dm = text.match(/dal\s+(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?\s+al\s+(\d{1,2})\/(\d{1,2})\/(\d{4})/i);
+    const pm = text.match(/(\d+(?:,\d{1,2})?)\s*€/);
+    if (!dm || !pm) return;
+    if (!text.toLowerCase().includes(query.toLowerCase())) return;
+    const endYear = parseInt(dm[6], 10);
+    const endIso = `${endYear}-${pad2(dm[5])}-${pad2(dm[4])}`;
+    const startYear = dm[3] ? parseInt(dm[3], 10) : (parseInt(dm[2], 10) > parseInt(dm[5], 10) ? endYear - 1 : endYear);
+    const startIso = `${startYear}-${pad2(dm[2])}-${pad2(dm[1])}`;
+    if (startIso > todayIso || endIso < todayIso) return; // nur aktuell gueltig
+    const alt = ($(a).find("img").first().attr("alt") || "").replace(/^logo\s*-\s*/i, "").trim();
+    const storeName = alt || hm[1].replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+    // Text vor "dal ..." ist "<Produkt> <Kette>" - Kette hinten abschneiden
+    let name = text.split(/\s+dal\s+\d/i)[0].trim();
+    if (name.toLowerCase().endsWith(storeName.toLowerCase())) name = name.slice(0, name.length - storeName.length).trim();
+    if (/munch/i.test(name)) return;
+    const total = parseFloat(pm[1].replace(",", "."));
+    if (Number.isNaN(total)) return;
+    const o = buildItOffer({
+      storeName,
+      name: name || "Monster Energy",
+      total,
+      endIso,
+      source: href.startsWith("/") ? `https://tutti-sconti.it${href}` : href
+    });
+    const k = `${o.storeName}|${o.product}|${o.price}|${o.validUntil}`;
+    if (seen.has(k)) return;
+    seen.add(k);
+    offers.push(o);
+  });
+  return { offers, links, title: $("title").first().text() };
+}
+
+async function scrapeTuttiScontiIT(query) {
+  if (!query.toLowerCase().includes("monster")) return [];
+  const url = "https://tutti-sconti.it/prodotti/monster-energy";
+  const { offers, links, title } = parseTuttiSconti(await fetchHtml(url, IT_LANG), query, itTodayIso());
+  console.log(`IT tutti-sconti: ${links} Angebotslinks, ${offers.length} gueltige Angebote`);
+  // Ohne Monster im Seitentitel ist es nicht die erwartete Seite (Sperre/Umbau)
+  if (!/monster/i.test(title)) throw new Error("tutti-sconti.it: unerwartete Seite (kein Monster im Titel)");
+  return offers;
+}
+
+const SCRAPERS_DE = [scrapeTrinkgut, scrapeKaufland, scrapeAldiNord, scrapeMeinprospekt];
+const SCRAPERS_IT = [scrapeVolantinofacileIT, scrapeTuttiScontiIT];
+
+// Je Land: Scraper + Filialsuche. storeOsmTag "" = keine Einschraenkung (wie
+// bisher in DE), "shop" = nur Laeden (IT: kurze Kettennamen wie "MD"/"Penny").
+const COUNTRIES = {
+  DE: { scrapers: SCRAPERS_DE, storeOsmTag: "" },
+  IT: { scrapers: SCRAPERS_IT, storeOsmTag: "shop" }
+};
+
+// Scraper-Ergebnisse sind nicht ortsabhaengig (nationale Prospektdaten) und
+// werden deshalb einmal pro Scraper 6 h gecacht statt pro Stadt neu geladen -
+// wichtig fuer Italien mit vielen Einzelseiten. Fehler werden nicht gecacht.
+const scrapeCache = new Map();
+async function cachedScrape(fn, query) {
+  const key = `${fn.name}|${query}`;
+  const hit = scrapeCache.get(key);
+  if (hit && Date.now() - hit.time < CACHE_MS) return hit.offers;
+  const offers = await fn(query);
+  scrapeCache.set(key, { time: Date.now(), offers });
+  return offers;
+}
+
+// Obergrenze fuer Filial-Suchen pro Anfrage (Photon ist ein oeffentlicher Dienst)
+const MAX_GEOCODED_STORES = 30;
 
 /* ---------- Endpunkt ---------- */
 app.get("/offers", async (req, res) => {
@@ -347,37 +604,122 @@ app.get("/offers", async (req, res) => {
     }
 
     const place = await reverseGeocode(lat, lon);
-    const key = `${place.city}|${brandQuery}`;
+    // Ohne erkanntes Land (Photon liefert nichts) wie bisher Deutschland annehmen
+    const country = place.countryCode || "DE";
+    const cfg = COUNTRIES[country];
+    if (!cfg) return res.json([]); // Land (noch) nicht unterstuetzt
+    const key = `${country}|${place.city}|${brandQuery}`;
 
     const hit = cache.get(key);
     if (hit && Date.now() - hit.time < CACHE_MS) {
       return res.json(hit.offers);
     }
 
-    const settled = await Promise.allSettled(SCRAPERS.map((fn) => fn(brandQuery)));
+    const settled = await Promise.allSettled(cfg.scrapers.map((fn) => cachedScrape(fn, brandQuery)));
     const raw = settled.flatMap((r, i) => {
       if (r.status === "fulfilled") return r.value;
-      console.error(`Scraper ${SCRAPERS[i].name} failed:`, r.reason?.message || r.reason);
+      console.error(`Scraper ${cfg.scrapers[i].name} failed:`, r.reason?.message || r.reason);
       return [];
     });
 
+    // Filialen je Kette nur einmal pro Anfrage suchen (mehrere Angebote
+    // derselben Kette teilen sich das Ergebnis). Bis zu 3 Filialen je Kette,
+    // Distanz-Filter (>100km) und Laenderfilter stecken in geocodeStores().
+    // Faellt eine Suche aus, verliert nur diese Kette ihre Filialen.
+    const branchMemo = new Map();
     const offers = [];
     for (const [i, o] of raw.entries()) {
-      // Bis zu 3 Filialen dieser Kette in der Naehe, nicht nur die naechste -
-      // Distanz-Filter (>100km) steckt schon in geocodeStores().
-      const branches = await geocodeStores(o.storeName, lat, lon, 3);
+      let branches = branchMemo.get(o.storeName);
+      if (!branches) {
+        if (branchMemo.size >= MAX_GEOCODED_STORES) continue;
+        try {
+          branches = await geocodeStores(o.storeName, lat, lon, 3, 100, country, cfg.storeOsmTag);
+        } catch (e) {
+          console.error(`geocodeStores(${o.storeName}) failed:`, e?.message || e);
+          branches = [];
+        }
+        branchMemo.set(o.storeName, branches);
+        await new Promise((r) => setTimeout(r, 300)); // hoeflicher Abstand zwischen Anfragen
+      }
       branches.forEach((geo, j) => {
         offers.push({ id: `${key}-${i}-${j}`, ...o, storeAddress: geo.address, lat: geo.lat, lon: geo.lon });
       });
-      await new Promise((r) => setTimeout(r, 300)); // hoeflicher Abstand zwischen Anfragen
     }
 
-    cache.set(key, { time: Date.now(), offers });
+    // Nur cachen, wenn mindestens ein Scraper geklappt hat - sonst wuerde ein
+    // kurzer Ausfall 6 Stunden lang eine leere Liste festhalten.
+    if (settled.some((r) => r.status === "fulfilled")) cache.set(key, { time: Date.now(), offers });
     res.json(offers);
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: String(e) });
   }
+});
+
+// Zeigt je italienischem Scraper, was er gefunden hat (nutzt den 6-h-Cache,
+// loest also hoechstens alle 6 h einen echten Scrape aus).
+app.get("/debug/it", async (_, res) => {
+  const result = {};
+  for (const fn of SCRAPERS_IT) {
+    try {
+      const offers = await cachedScrape(fn, "Monster");
+      result[fn.name] = { ok: true, count: offers.length, offers };
+    } catch (e) {
+      result[fn.name] = { ok: false, error: String(e?.message || e) };
+    }
+  }
+  res.json(result);
+});
+
+// Diagnose: Was liefern die italienischen Quellen an DIESEN Server? Manche
+// Seiten geben Cloud-IPs (Render) anderen Inhalt als einem normalen Browser.
+// Feste Liste, keine frei waehlbare URL. Ausgabe als Text (handy-tauglich),
+// Ergebnis 10 Minuten gemerkt, damit ein Aufruf nicht jedes Mal alle Seiten laedt.
+// euroLinks = Links, in deren Text ein Preis (EUR-Zeichen) steht; sample = Text
+// des ersten - zeigt, wie eine Angebotskarte aufgebaut ist.
+const IT_DEBUG_SOURCES = [
+  "https://www.volantinofacile.it/confronta-prezzi/spesa/acqua-alcolici-bibite/energy-drink",
+  "https://tutti-sconti.it/prodotti/monster-energy",
+  "https://www.promoqui.it/offerte/monster-energy"
+];
+let debugSourcesCache = { time: 0, text: "" };
+
+app.get("/debug/sources", async (_, res) => {
+  if (Date.now() - debugSourcesCache.time < 10 * 60 * 1000) {
+    return res.type("text/plain").send(debugSourcesCache.text);
+  }
+  const lines = [];
+  for (const url of IT_DEBUG_SOURCES) {
+    const short = url.replace(/^https:\/\/(www\.)?/, "");
+    try {
+      const r = await fetch(url, {
+        headers: { "User-Agent": UA, "Accept-Language": IT_LANG },
+        signal: AbortSignal.timeout(20000)
+      });
+      const body = await r.text();
+      const $ = cheerio.load(body);
+      $("script,style,noscript").remove();
+      const euroLinks = $("a").toArray().filter((a) => /€/.test(textWithSpaces(a)));
+      lines.push(
+        [
+          short,
+          `HTTP ${r.status}`,
+          `${Math.round(body.length / 1024)} KB`,
+          `title="${($("title").first().text() || "").trim().slice(0, 60)}"`,
+          `tables=${(body.match(/<table/gi) || []).length}`,
+          `monster=${(body.match(/monster/gi) || []).length}`,
+          `euroLinks=${euroLinks.length}`,
+          `sample="${euroLinks[0] ? textWithSpaces(euroLinks[0]).slice(0, 140) : ""}"`
+        ].join(" | ")
+      );
+    } catch (e) {
+      lines.push(`${short} | FEHLER ${e?.message || e}`);
+    }
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  const text = lines.join("\n\n");
+  debugSourcesCache = { time: Date.now(), text };
+  res.type("text/plain").send(text);
 });
 
 app.get("/health", (_, res) => res.send("ok"));
