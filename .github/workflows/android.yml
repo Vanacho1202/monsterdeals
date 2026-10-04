@@ -23,7 +23,20 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - uses: android-actions/setup-android@v3
+      # android-actions/setup-android@v3 versucht neuerdings (seit einem
+      # Runner-Image-Update) unnoetige Extra-Pakete (TV/XR/ARM-Emulator) zu
+      # installieren und bleibt dabei an einer interaktiven Lizenz-Abfrage
+      # haengen (CI hat kein stdin -> Build bricht ab, bevor ueberhaupt
+      # gebaut wird). ubuntu-latest hat die Android-SDK-Kommandozeilentools
+      # bereits vorinstalliert; es fehlt nur die Lizenz-Zustimmung fuer
+      # Gradle/AGP, um fehlende Pakete (Platform/Build-Tools) selbst
+      # nachzuladen - das reicht und ist stabiler als die Action.
+      - name: Android-SDK-Lizenzen akzeptieren (ohne interaktive Abfrage)
+        run: |
+          mkdir -p "$ANDROID_HOME/licenses"
+          echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > "$ANDROID_HOME/licenses/android-sdk-license"
+          echo "d56f5187479451eabf01fb78af6dfcb131a6481e4" >> "$ANDROID_HOME/licenses/android-sdk-license"
+          echo "84831b9409646a918e30573bab4c9c91346d8abd" > "$ANDROID_HOME/licenses/android-sdk-preview-license"
 
       - name: Gradle-Wrapper ausfuehrbar machen
         run: chmod +x ./gradlew
