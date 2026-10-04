@@ -183,14 +183,14 @@ private fun OfferCard(offer: Offer, here: LatLon) {
                     Spacer(Modifier.width(8.dp))
                     Column(horizontalAlignment = Alignment.End) {
                         Text(
-                            String.format("%.2f €", offer.price),
+                            String.format("%.2f %s", offer.price, offer.currencyLabel),
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary
                         )
                         if (offer.deposit > 0) {
                             Text(
-                                String.format("+ %.2f € Pfand", offer.deposit),
+                                String.format("+ %.2f %s Pfand", offer.deposit, offer.currencyLabel),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
