@@ -50,6 +50,14 @@
  *    Antwort) und ist deshalb nicht dabei. Unter /debug/it sieht man je
  *    Scraper, was gefunden wurde.
  *  - Kein Einwegpfand in Italien -> deposit: 0.
+ *  - FR, NL, PL, PT, BE, AT, CZ, DK, GR, HU, SK, SE: je 1 Quelle ueber
+ *    tiendeo.<tld> (ShopFully-Netzwerk, dieselbe Plattform wie
+ *    volantinofacile.it/IT, siehe scrapeTiendeo()). Live mit echten
+ *    Energy-Drink-Treffern verifiziert, deckt pro Land mehrere Ketten ab.
+ *    Naechster Ausbauschritt: zweite, unabhaengige Quelle pro Land.
+ *  - Preise sind NICHT automatisch Euro - jedes Angebot traegt ein eigenes
+ *    "currency"-Feld (ISO-Code, z.B. PLN/CZK/HUF/DKK/SEK), die App zeigt das
+ *    passende Symbol/Kuerzel an statt blind "€" zu unterstellen.
  *  - Nicht unterstuetzte Laender liefern eine leere Liste.
  */
 import express from "express";
@@ -565,15 +573,121 @@ async function scrapeTuttiScontiIT(query) {
   return offers;
 }
 
-const SCRAPERS_DE = [scrapeTrinkgut, scrapeKaufland, scrapeAldiNord, scrapeMeinprospekt];
-const SCRAPERS_IT = [scrapeVolantinofacileIT, scrapeTuttiScontiIT];
+/**
+ * Scraper: tiendeo.<tld> (ShopFully-Netzwerk - dieselbe Plattform wie
+ * volantinofacile.it fuer Italien, nur mit eigener Landesdomain pro Markt:
+ * tiendeo.de, tiendeo.fr, tiendeo.pl, ...). Die Suchergebnisse stecken
+ * strukturiert im Next.js __NEXT_DATA__-JSON unter
+ * props.pageProps.apiResources.flyerGibsData.flyerGibs - keine
+ * HTML-Textextraktion noetig, exakt dieselbe Feldstruktur in jedem Land
+ * (live geprueft). Ein Scraper deckt damit auf einen Schlag viele Ketten
+ * pro Land ab statt pro Kette einzeln gebaut werden zu muessen - bestaetigt
+ * u.a.: Conad/IT, E.Leclerc+Lidl+Metro/FR, Lidl+Dirck III/NL, Biedronka/PL,
+ * Auchan+Pingo Doce/PT, Action+SPAR/BE, Lidl/AT, Coop/CZ, Foetex/DK,
+ * Masoutis/GR, Interspar/HU, Kaufland/SK, ICA/SE.
+ */
+// round2() ist bereits oben (IT-Abschnitt) definiert.
+
+// Stueckzahl aus der Packungsbeschreibung, sprachunabhaengig ueber Zahlen-
+// Muster statt Woerter (die Seite liefert Beschreibungen in der jeweiligen
+// Landessprache): "12 x 50 cl", "8x50 cl", "4x0.50l" -> Mehrfachpack-Anzahl.
+// Nur eine einzelne Volumenangabe ("500 ml", "0,5 l", "50 cl") -> Einzeldose.
+// Weder noch (z.B. "3+1 gratis", leer) -> unklar, nicht geraten.
+function detectTiendeoPack(description) {
+  const d = (description || "").toLowerCase();
+  if (!d) return null;
+  const multi = d.match(/(\d+)\s*[x×]\s*[\d.,]+\s*(ml|cl|l)\b/);
+  if (multi) {
+    const c = parseInt(multi[1], 10);
+    return c >= 2 && c <= 30 ? c : null;
+  }
+  if (/\b\d{2,4}\s*ml\b/.test(d) || /\b\d+(?:[.,]\d+)?\s*(cl|l)\b/.test(d)) return 1;
+  return null;
+}
+
+// Akzente entfernen (NFD-Zerlegung + Diakritika strippen), damit z.B.
+// "énergisante" (FR) trotzdem auf "energ" matched.
+function stripDiacritics(s) {
+  return s.normalize("NFD").replace(/[̀-ͯ]/g, "");
+}
+
+async function scrapeTiendeo(tld, query) {
+  const url = `https://www.tiendeo.${tld}/search?q=${encodeURIComponent(query)}`;
+  const $ = cheerio.load(await fetchHtml(url, "en;q=0.9"));
+  const raw = $("#__NEXT_DATA__").html();
+  if (!raw) throw new Error(`tiendeo.${tld}: kein __NEXT_DATA__ gefunden (Layout geaendert?)`);
+  const gibs = JSON.parse(raw)?.props?.pageProps?.apiResources?.flyerGibsData?.flyerGibs || [];
+  const today = new Date().toISOString().slice(0, 10);
+  const out = [];
+  for (const g of gibs) {
+    const name = (g.title || "").trim();
+    const storeName = (g.retailerName || "").trim();
+    if (!name || !storeName) continue;
+    const nameNorm = stripDiacritics(name.toLowerCase());
+    // "Monster" trifft europaweit auch auf andere Produktlinien der Marke
+    // (Monster High Puppen, Monster Munch Chips, u.ae.) - zusaetzlich zum
+    // Markennamen muss "energ" vorkommen (Energy/énergie/energético/
+    // energetický/energiaital/... - in den meisten EU-Sprachen ein
+    // gemeinsamer Wortstamm), sonst waeren das falsche Treffer.
+    if (!nameNorm.includes(query.toLowerCase()) || !nameNorm.includes("energ")) continue;
+    const digits = g.settings?.price_extended?.digits;
+    const total = digits != null ? parseFloat(String(digits).replace(",", ".")) : NaN;
+    if (Number.isNaN(total)) continue;
+    const endIso = g.flyer?.end_date || "";
+    if (endIso && endIso < today) continue; // abgelaufen
+    const currency = g.settings?.price_extended?.currency_code || "EUR";
+    const count = detectTiendeoPack(g.description);
+    let price = total;
+    let packInfo;
+    if (count && count > 1) {
+      price = round2(total / count);
+      packInfo = `Nur im Mehrfachpack (${total.toFixed(2)} ${currency} gesamt)`;
+    } else if (count === 1) {
+      packInfo = "Einzeldose";
+    } else {
+      packInfo = "Nicht eindeutig erkennbar";
+    }
+    out.push({
+      storeName,
+      product: name,
+      packInfo,
+      price,
+      // Pfandsysteme unterscheiden sich stark zwischen Laendern und stehen
+      // nicht zuverlaessig in den Daten - ehrlich 0 statt geraten, ausser der
+      // Text nennt es explizit (DE: fast immer "zzgl. ... Pfand").
+      deposit: /pfand/i.test(g.description || "") ? 0.25 : 0,
+      regularPrice: null,
+      validUntil: formatDate(endIso),
+      currency,
+      source: url
+    });
+  }
+  return out;
+}
+
+function makeTiendeoScraper(tld) {
+  const fn = (query) => scrapeTiendeo(tld, query);
+  Object.defineProperty(fn, "name", { value: `scrapeTiendeo_${tld}` });
+  return fn;
+}
+
+const SCRAPERS_DE = [scrapeTrinkgut, scrapeKaufland, scrapeAldiNord, scrapeMeinprospekt, makeTiendeoScraper("de")];
+const SCRAPERS_IT = [scrapeVolantinofacileIT, scrapeTuttiScontiIT, makeTiendeoScraper("it")];
 
 // Je Land: Scraper + Filialsuche. storeOsmTag "" = keine Einschraenkung (wie
-// bisher in DE), "shop" = nur Laeden (IT: kurze Kettennamen wie "MD"/"Penny").
+// bisher in DE), "shop" = nur Laeden (kurze Kettennamen wie "MD"/"SPAR"
+// treffen sonst auch Orte/Personen).
 const COUNTRIES = {
   DE: { scrapers: SCRAPERS_DE, storeOsmTag: "" },
   IT: { scrapers: SCRAPERS_IT, storeOsmTag: "shop" }
 };
+
+// Weitere EU-Laender, bisher nur ueber tiendeo abgedeckt (1 Quelle statt wie
+// DE/IT mehrere) - live mit echten Monster-Energy-Treffern verifiziert.
+// Naechster Ausbauschritt: pro Land eine zweite, unabhaengige Quelle finden.
+for (const cc of ["FR", "NL", "PL", "PT", "BE", "AT", "CZ", "DK", "GR", "HU", "SK", "SE"]) {
+  COUNTRIES[cc] = { scrapers: [makeTiendeoScraper(cc.toLowerCase())], storeOsmTag: "shop" };
+}
 
 // Scraper-Ergebnisse sind nicht ortsabhaengig (nationale Prospektdaten) und
 // werden deshalb einmal pro Scraper 6 h gecacht statt pro Stadt neu geladen -
@@ -642,7 +756,16 @@ app.get("/offers", async (req, res) => {
         await new Promise((r) => setTimeout(r, 300)); // hoeflicher Abstand zwischen Anfragen
       }
       branches.forEach((geo, j) => {
-        offers.push({ id: `${key}-${i}-${j}`, ...o, storeAddress: geo.address, lat: geo.lat, lon: geo.lon });
+        // currency-Fallback fuer die aelteren DE/IT-Scraper, die das Feld noch
+        // nicht selbst setzen (die waren immer EUR, nie etwas anderes).
+        offers.push({
+          id: `${key}-${i}-${j}`,
+          ...o,
+          currency: o.currency || "EUR",
+          storeAddress: geo.address,
+          lat: geo.lat,
+          lon: geo.lon
+        });
       });
     }
 
