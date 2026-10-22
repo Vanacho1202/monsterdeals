@@ -37,7 +37,7 @@ class OfferRepository(
     suspend fun nearbyOffers(
         lat: Double,
         lon: Double,
-        radiusKm: Int = 15,
+        radiusKm: Int = 25,
         query: String = "Monster Energy"
     ): List<Offer> {
         return client.get("$baseUrl/offers") {

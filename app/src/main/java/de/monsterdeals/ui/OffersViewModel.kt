@@ -31,7 +31,7 @@ class OffersViewModel(app: Application) : AndroidViewModel(app) {
     private val _state = MutableStateFlow<UiState>(UiState.AskingPermissions)
     val state: StateFlow<UiState> = _state.asStateFlow()
 
-    var radiusKm = 15
+    var radiusKm = 25
         private set
 
     fun setRadius(km: Int) {

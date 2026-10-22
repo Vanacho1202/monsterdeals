@@ -652,9 +652,13 @@ async function scrapeTiendeo(tld, query) {
     // gemeinsamer Wortstamm), sonst wären das falsche Treffer.
     if (!nameNorm.includes(query.toLowerCase())) continue;
     const fullText = stripDiacritics(`${name} ${g.description || ""}`.toLowerCase());
-    // "energ" im Text -> sicher Energy-Drink. Sonst nur ausschließen, wenn
-    // es offensichtlich ein Fremdprodukt ist (Monster High, Monster Munch ...).
-    if (!fullText.includes("energ") && MONSTER_FALSE_POSITIVES.test(fullText)) continue;
+    // tiendeo liefert bei "Monster" auch Fremdprodukte (z.B. "Monster -
+    // Toilettenpapier Family Edition", "Monster - Smashers Horror House").
+    // Deshalb hier nicht nur offensichtliche Fremdprodukte ausschließen,
+    // sondern einen positiven Getränke-Hinweis verlangen (energ, Dose, ml,
+    // bekannte Sorte ...).
+    if (MONSTER_FALSE_POSITIVES.test(fullText) || NON_DRINK.test(fullText)) continue;
+    if (!DRINK_HINT.test(fullText)) continue;
     const digits = g.settings?.price_extended?.digits;
     const total = digits != null ? parseFloat(String(digits).replace(",", ".")) : NaN;
     const hasPrice = !Number.isNaN(total);
@@ -733,10 +737,75 @@ async function cachedScrape(fn, query) {
   return offers;
 }
 
-// Angebote ohne Eurobetrag (price: null, nur Prozent-Rabatt) gibt es nur mit
-// ?includePromo=1. So bricht eine App, die price immer als Zahl erwartet, nicht.
-function forClient(offers, req) {
-  return req.query.includePromo === "1" ? offers : offers.filter((o) => o.price != null);
+/* ---------- Plausibilitäts-Filter (für alle Quellen) ---------- */
+
+// Text für Vergleiche: klein, ohne Akzente/Umlaute ("Plüsch" -> "plusch").
+function normText(s) {
+  return stripDiacritics(String(s || "").toLowerCase());
+}
+
+// Produkte, die zwar "Monster" heißen, aber kein Getränk sind.
+const NON_DRINK =
+  /\b(toilettenpapier|klopapier|papier|kuchenrolle|taschentuch\w*|tissue|smashers|horror|spielzeug|spielset|spielfigur\w*|figur|figuren|puppe|puppen|plusch\w*|plush|chips|snack|socken|shirt|kopfhorer|headphones?|lego|playmobil|kostum|maske|zahnburste|brotdose|trinkflasche|rucksack)\b/;
+
+// Positiver Hinweis, dass es wirklich ein (Energy-)Getränk ist.
+const DRINK_HINT =
+  /(energ|\bdrinks?\b|\bdosen?\b|\bcans?\b|lattin|\d\s*(ml|cl|l)\b|\bultra\b|juiced?\b|rehab|mango loco|pipeline|khaotic|nitro|reserve|\bzero\b|\bjava\b)/;
+
+function isPlausibleProduct(o) {
+  return !NON_DRINK.test(normText(o.product));
+}
+
+// "14.04.2027" -> Date (oder null)
+function parseDeDate(s) {
+  const m = String(s || "").match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  return m ? new Date(Date.UTC(+m[3], +m[2] - 1, +m[1])) : null;
+}
+
+// Prospekt-Angebote laufen ca. 1-2 Wochen. Ein Enddatum mehr als 31 Tage in
+// der Zukunft ist kein echtes Angebot (z.B. Dauerprospekt / falsches Feld).
+const MAX_VALID_DAYS = 31;
+function hasPlausibleValidity(o) {
+  const d = parseDeDate(o.validUntil);
+  if (!d) return true; // unbekanntes Datum: nicht deshalb verwerfen
+  return d.getTime() - Date.now() <= MAX_VALID_DAYS * 24 * 60 * 60 * 1000;
+}
+
+// Gleiches Angebot aus mehreren Prospekten/Quellen nur einmal behalten.
+function dedupe(offers, keyFn) {
+  const seen = new Set();
+  return offers.filter((o) => {
+    const k = keyFn(o);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+const offerKey = (o) => `${normText(o.storeName)}|${normText(o.product).replace(/[^a-z0-9]+/g, " ").trim()}|${o.price}`;
+
+const DEFAULT_RADIUS_KM = 25;
+const MAX_RADIUS_KM = 100;
+
+function radiusFrom(req) {
+  const r = parseFloat(req.query.radiusKm);
+  if (Number.isNaN(r) || r <= 0) return DEFAULT_RADIUS_KM;
+  return Math.min(r, MAX_RADIUS_KM);
+}
+
+/**
+ * Letzter Filter vor der Antwort (läuft auch auf Cache-Treffern):
+ *  - nur Filialen im Umkreis radiusKm (Standard 25 km, max. 100 km)
+ *  - Angebote ohne Eurobetrag (nur Prozent-Rabatt) nur mit ?includePromo=1
+ *  - Angebote mit unklarer Packungsgröße nur mit ?includeUnclear=1
+ */
+function forClient(offers, req, lat, lon) {
+  const radiusKm = radiusFrom(req);
+  return offers.filter((o) => {
+    if (haversineKm(lat, lon, o.lat, o.lon) > radiusKm) return false;
+    if (o.price == null && req.query.includePromo !== "1") return false;
+    if (o.packInfo === "Nicht eindeutig erkennbar" && req.query.includeUnclear !== "1") return false;
+    return true;
+  });
 }
 
 // Obergrenze für Filial-Suchen pro Anfrage (Photon ist ein öffentlicher Dienst)
@@ -759,19 +828,24 @@ app.get("/offers", async (req, res) => {
     const country = place.countryCode || "DE";
     const cfg = COUNTRIES[country];
     if (!cfg) return res.json([]); // Land (noch) nicht unterstützt
-    const key = `${country}|${place.city}|${brandQuery}`;
+    const key = `v2|${country}|${place.city}|${brandQuery}`;
 
     const hit = cache.get(key);
     if (hit && Date.now() - hit.time < CACHE_MS) {
-      return res.json(forClient(hit.offers, req));
+      return res.json(forClient(hit.offers, req, lat, lon));
     }
 
     const settled = await Promise.allSettled(cfg.scrapers.map((fn) => cachedScrape(fn, brandQuery)));
-    const raw = settled.flatMap((r, i) => {
+    const rawAll = settled.flatMap((r, i) => {
       if (r.status === "fulfilled") return r.value;
       console.error(`Scraper ${cfg.scrapers[i].name} failed:`, r.reason?.message || r.reason);
       return [];
     });
+    // Fremdprodukte und unplausible Laufzeiten raus, Duplikate zusammenfassen
+    const raw = dedupe(
+      rawAll.filter(isPlausibleProduct).filter(hasPlausibleValidity),
+      offerKey
+    );
 
     // Filialen je Kette nur einmal pro Anfrage suchen (mehrere Angebote
     // derselben Kette teilen sich das Ergebnis). Bis zu 3 Filialen je Kette,
@@ -806,10 +880,15 @@ app.get("/offers", async (req, res) => {
       });
     }
 
+    // Sicherheitsnetz: dieselbe Filiale mit demselben Angebot nur einmal
+    const uniqueOffers = dedupe(offers, (o) => `${offerKey(o)}|${normText(o.storeAddress)}`);
+    offers.length = 0;
+    offers.push(...uniqueOffers);
+
     // Nur cachen, wenn mindestens ein Scraper geklappt hat - sonst würde ein
     // kurzer Ausfall 6 Stunden lang eine leere Liste festhalten.
     if (settled.some((r) => r.status === "fulfilled")) cache.set(key, { time: Date.now(), offers });
-    res.json(forClient(offers, req));
+    res.json(forClient(offers, req, lat, lon));
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: String(e) });
