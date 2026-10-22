@@ -901,7 +901,7 @@ app.get("/offers", async (req, res) => {
     const country = place.countryCode || "DE";
     const cfg = COUNTRIES[country];
     if (!cfg) return res.json([]); // Land (noch) nicht unterstützt
-    const key = `v3|${country}|${place.city}|${brandQuery}`;
+    const key = `v4|${country}|${place.city}|${brandQuery}`;
 
     const hit = cache.get(key);
     if (hit && Date.now() - hit.time < CACHE_MS) {
@@ -942,7 +942,13 @@ app.get("/offers", async (req, res) => {
         branchMemo.set(o.storeName, branches);
         await new Promise((r) => setTimeout(r, 300)); // höflicher Abstand zwischen Anfragen
       }
-      branches.forEach((geo, j) => {
+      // "Netto" allein (ohne "Marken-Discount") ist bei den Quellen die
+      // rot-gelbe Netto-Kette mit dem Scottie-Hund (nur Nord/Ost). Ihre
+      // Angebote dürfen nicht auf Filialen von Netto Marken-Discount gelegt
+      // werden - das sind zwei verschiedene Firmen mit eigenen Prospekten.
+      const isScottieNetto = /^netto\b/i.test(o.storeName) && !/marken/i.test(o.storeName);
+      const usable = isScottieNetto ? branches.filter((b) => !/marken/i.test(b.address)) : branches;
+      usable.forEach((geo, j) => {
         // currency-Fallback für die älteren DE/IT-Scraper, die das Feld noch
         // nicht selbst setzen (die waren immer EUR, nie etwas anderes).
         offers.push({
