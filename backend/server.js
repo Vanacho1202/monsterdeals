@@ -121,6 +121,19 @@ async function reverseGeocode(lat, lon) {
  * maxKm - damit z.B. "Penny" nicht nur eine, sondern mehrere Filialen in
  * der Nähe zeigt, falls es dort mehrere gibt.
  */
+// Filialen ändern sich kaum: Ergebnis je Kette + grobe Position (~10 km
+// Raster) 24 h merken. Spart Photon-Anfragen und vermeidet das Rate-Limit.
+const storeCache = new Map();
+const STORE_CACHE_MS = 24 * 60 * 60 * 1000;
+async function geocodeStoresCached(name, nearLat, nearLon, maxResults, maxKm, countryCode, osmTag) {
+  const k = `${name}|${nearLat.toFixed(1)}|${nearLon.toFixed(1)}|${countryCode}|${osmTag}`;
+  const hit = storeCache.get(k);
+  if (hit && Date.now() - hit.time < STORE_CACHE_MS) return { branches: hit.branches, cached: true };
+  const branches = await geocodeStores(name, nearLat, nearLon, maxResults, maxKm, countryCode, osmTag);
+  storeCache.set(k, { time: Date.now(), branches });
+  return { branches, cached: false };
+}
+
 async function geocodeStores(name, nearLat, nearLon, maxResults = 3, maxKm = 100, countryCode = "DE", osmTag = "") {
   // NUR den Kettennamen suchen, ohne Stadt im Suchtext: Photons Textsuche
   // kombiniert "Kette, kleiner Ort" oft schlecht (fand z.B. für "Lidl,
@@ -132,8 +145,16 @@ async function geocodeStores(name, nearLat, nearLon, maxResults = 3, maxKm = 100
   // wie "MD" oder "Penny", die sonst auch Orte/Personen treffen.
   const tagParam = osmTag ? `&osm_tag=${encodeURIComponent(osmTag)}` : "";
   const url = `https://photon.komoot.io/api/?q=${q}&limit=15&lat=${nearLat}&lon=${nearLon}${tagParam}`;
-  const r = await fetch(url, { headers: { "User-Agent": UA } });
-  const j = await r.json();
+  // Photon antwortet bei zu vielen Anfragen mit einer HTML-Seite statt JSON
+  // (Rate-Limit). Dann einmal kurz warten und erneut versuchen.
+  let j;
+  for (let attempt = 0; ; attempt++) {
+    const r = await fetch(url, { headers: { "User-Agent": UA } });
+    const body = await r.text();
+    if (r.ok && body.trim().startsWith("{")) { j = JSON.parse(body); break; }
+    if (attempt >= 1) throw new Error(`Photon HTTP ${r.status} (kein JSON, vermutlich Rate-Limit)`);
+    await new Promise((res) => setTimeout(res, 2500));
+  }
   const candidates = (j.features || [])
     .filter((feat) => (feat.properties?.countrycode || "").toUpperCase() === countryCode)
     .map((f) => {
@@ -911,7 +932,7 @@ app.get("/offers", async (req, res) => {
     const country = place.countryCode || "DE";
     const cfg = COUNTRIES[country];
     if (!cfg) return res.json([]); // Land (noch) nicht unterstützt
-    const key = `v5|${country}|${place.city}|${brandQuery}`;
+    const key = `v6|${country}|${place.city}|${brandQuery}`;
 
     const hit = cache.get(key);
     if (hit && Date.now() - hit.time < CACHE_MS) {
@@ -935,6 +956,7 @@ app.get("/offers", async (req, res) => {
     // Distanz-Filter (>100km) und Länderfilter stecken in geocodeStores().
     // Fällt eine Suche aus, verliert nur diese Kette ihre Filialen.
     const branchMemo = new Map();
+    let geocodeFailed = false;
     const offers = [];
     for (const [i, o] of raw.entries()) {
       let branches = branchMemo.get(o.storeName);
@@ -944,13 +966,16 @@ app.get("/offers", async (req, res) => {
           // Kurze Namen wie "HIT" oder "K+K" nur unter Läden suchen, sonst
           // treffen sie Orte/Straßen.
           const osmTag = cfg.storeOsmTag || (o.storeName.replace(/[^A-Za-z]/g, "").length <= 4 ? "shop" : "");
-          branches = await geocodeStores(o.storeName, lat, lon, 3, 100, country, osmTag);
+          const res = await geocodeStoresCached(o.storeName, lat, lon, 3, 100, country, osmTag);
+          branches = res.branches;
+          // Photon erlaubt etwa 1 Anfrage pro Sekunde - nur nach echten Anfragen warten
+          if (!res.cached) await new Promise((r) => setTimeout(r, 1100));
         } catch (e) {
           console.error(`geocodeStores(${o.storeName}) failed:`, e?.message || e);
           branches = [];
+          geocodeFailed = true;
         }
         branchMemo.set(o.storeName, branches);
-        await new Promise((r) => setTimeout(r, 300)); // höflicher Abstand zwischen Anfragen
       }
       // "Netto" allein (ohne "Marken-Discount") ist bei den Quellen die
       // rot-gelbe Netto-Kette mit dem Scottie-Hund (nur Nord/Ost). Ihre
@@ -984,7 +1009,9 @@ app.get("/offers", async (req, res) => {
 
     // Nur cachen, wenn mindestens ein Scraper geklappt hat - sonst würde ein
     // kurzer Ausfall 6 Stunden lang eine leere Liste festhalten.
-    if (settled.some((r) => r.status === "fulfilled")) cache.set(key, { time: Date.now(), offers });
+    // Ist eine Filialsuche fehlgeschlagen, nicht 6 h festhalten - beim
+    // nächsten Aufruf neu versuchen (gefundene Filialen sind ohnehin gecacht).
+    if (!geocodeFailed && settled.some((r) => r.status === "fulfilled")) cache.set(key, { time: Date.now(), offers });
     res.json(forClient(offers, req, lat, lon));
   } catch (e) {
     console.error(e);
