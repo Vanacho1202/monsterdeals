@@ -144,6 +144,7 @@ async function geocodeStores(name, nearLat, nearLon, maxResults = 3, maxKm = 100
         lat,
         lon,
         address: [p.name, p.street, p.housenumber, p.postcode, p.city].filter(Boolean).join(", "),
+        state: p.state || "",
         distanceKm: haversineKm(nearLat, nearLon, lat, lon)
       };
     })
@@ -881,6 +882,15 @@ function forClient(offers, req, lat, lon) {
   });
 }
 
+// Ketten, die es nur in bestimmten Bundesländern gibt (Photon-"state").
+// Schlüssel: Kettenname klein, ohne Sonder-/Leerzeichen, als Präfix.
+const REGIONAL_CHAINS = {
+  getrankeland: ["Mecklenburg-Vorpommern", "Brandenburg", "Berlin"],
+  holab: ["Niedersachsen", "Bremen", "Hamburg", "Schleswig-Holstein", "Nordrhein-Westfalen", "Sachsen-Anhalt"],
+  kk: ["Nordrhein-Westfalen", "Niedersachsen"],
+  nettomitdemscottie: ["Mecklenburg-Vorpommern", "Brandenburg", "Berlin", "Sachsen", "Sachsen-Anhalt", "Schleswig-Holstein", "Hamburg", "Niedersachsen"]
+};
+
 // Obergrenze für Filial-Suchen pro Anfrage (Photon ist ein öffentlicher Dienst)
 const MAX_GEOCODED_STORES = 30;
 
@@ -901,7 +911,7 @@ app.get("/offers", async (req, res) => {
     const country = place.countryCode || "DE";
     const cfg = COUNTRIES[country];
     if (!cfg) return res.json([]); // Land (noch) nicht unterstützt
-    const key = `v4|${country}|${place.city}|${brandQuery}`;
+    const key = `v5|${country}|${place.city}|${brandQuery}`;
 
     const hit = cache.get(key);
     if (hit && Date.now() - hit.time < CACHE_MS) {
@@ -947,7 +957,12 @@ app.get("/offers", async (req, res) => {
       // Angebote dürfen nicht auf Filialen von Netto Marken-Discount gelegt
       // werden - das sind zwei verschiedene Firmen mit eigenen Prospekten.
       const isScottieNetto = /^netto\b/i.test(o.storeName) && !/marken/i.test(o.storeName);
-      const usable = isScottieNetto ? branches.filter((b) => !/marken/i.test(b.address)) : branches;
+      let usable = isScottieNetto ? branches.filter((b) => !/marken/i.test(b.address)) : branches;
+      // Regionale Ketten: Photon findet sonst gleichnamige, aber fremde Läden
+      // (z.B. "Getränkeland Kaufmann" in Gladenbach statt der GetränkeLAND-
+      // Kette aus dem Nordosten). Nur Filialen im Verbreitungsgebiet zulassen.
+      const regionKey = Object.keys(REGIONAL_CHAINS).find((k) => normText(o.storeName).replace(/[^a-z0-9]/g, "").startsWith(k));
+      if (regionKey) usable = usable.filter((b) => REGIONAL_CHAINS[regionKey].includes(b.state));
       usable.forEach((geo, j) => {
         // currency-Fallback für die älteren DE/IT-Scraper, die das Feld noch
         // nicht selbst setzen (die waren immer EUR, nie etwas anderes).
