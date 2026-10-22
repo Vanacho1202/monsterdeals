@@ -322,7 +322,10 @@ async function scrapeMeinprospekt(query) {
     const brand = $(ps.get(1)).text().trim();
     const productType = $(ps.get(2)).text().trim();
     const priceText = $(el).find(".text-primary").first().text().trim();
-    const totalPrice = parseFloat(priceText.replace(",", "."));
+    // Preis kann "ab 0,89 €" heißen (z.B. Trinkgut) - Zahl per Regex holen,
+    // parseFloat("ab 0.89") wäre NaN und das Angebot fiel komplett weg.
+    const priceNum = priceText.match(/\d+(?:[.,]\d{1,2})?/);
+    const totalPrice = priceNum ? parseFloat(priceNum[0].replace(",", ".")) : NaN;
     if (!storeName || Number.isNaN(totalPrice)) return;
     const oldPriceText = $(el).find(".line-through").first().text().trim();
     const regularPrice = oldPriceText ? parseFloat(oldPriceText.replace(",", ".")) : null;
@@ -974,6 +977,70 @@ app.get("/debug/tiendeo", async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: String(e?.message || e) });
   }
+});
+
+// Diagnose für neue/kaputte Quellen: feste Liste (keine frei wählbare URL),
+// Textausgabe. Zeigt, wie die Seite AUF DEM SERVER aussieht: Status, Größe,
+// __NEXT_DATA__/JSON-LD und Textstellen rund um "Monster".
+const PROBE_SOURCES = {
+  kaufda: "https://www.kaufda.de/Angebote/Monster-Energy",
+  energy: "https://energy-angebote.de/monster-energy-0-5l",
+  trinkgut: "https://www.trinkgut.de/angebote",
+  meinprospekt: "https://www.meinprospekt.de/angebote/monster-energy"
+};
+
+function findJsonPaths(node, path, out, depth = 0) {
+  if (out.length >= 6 || depth > 14 || !node || typeof node !== "object") return;
+  const s = JSON.stringify(node);
+  if (!/monster/i.test(s)) return;
+  // kleinstes Objekt, das Monster enthält und nicht zu groß ist
+  if (s.length < 1500 && !Array.isArray(node)) {
+    out.push(`${path}: ${s.slice(0, 1200)}`);
+    return;
+  }
+  for (const [k, v] of Object.entries(node)) findJsonPaths(v, `${path}.${k}`, out, depth + 1);
+}
+
+app.get("/debug/probe", async (req, res) => {
+  const src = String(req.query.src || "");
+  const url = PROBE_SOURCES[src];
+  if (!url) return res.status(400).type("text/plain").send(`src = ${Object.keys(PROBE_SOURCES).join(" | ")}`);
+  const lines = [];
+  try {
+    const r = await fetch(url, { headers: { "User-Agent": UA, "Accept-Language": "de-DE,de;q=0.9" }, signal: AbortSignal.timeout(25000) });
+    const html = await r.text();
+    const $ = cheerio.load(html);
+    lines.push(`URL ${url}`, `HTTP ${r.status} | ${Math.round(html.length / 1024)} KB | title="${$("title").first().text().trim().slice(0, 80)}"`);
+    const nd = $("#__NEXT_DATA__").html();
+    lines.push(`__NEXT_DATA__: ${nd ? Math.round(nd.length / 1024) + " KB" : "nein"}`);
+    if (nd) {
+      const out = [];
+      try { findJsonPaths(JSON.parse(nd), "root", out); } catch (e) { out.push(`parse-fehler ${e.message}`); }
+      lines.push("JSON-Treffer:", ...out);
+    }
+    const ld = $('script[type="application/ld+json"]').toArray().map((x) => $(x).html() || "");
+    lines.push(`JSON-LD: ${ld.length} Blöcke, mit Monster: ${ld.filter((x) => /monster/i.test(x)).length}`);
+    ld.filter((x) => /monster/i.test(x)).slice(0, 2).forEach((x) => lines.push(`LD: ${x.slice(0, 1500)}`));
+    lines.push(`.product-box: ${$(".product-box").length}`);
+    // Klassen der Elemente, die einen Preis + Monster enthalten (Karten finden)
+    const cards = $("*").toArray().filter((el) => {
+      const t = $(el).text();
+      return t.length < 400 && /monster/i.test(t) && /\d,\d{2}/.test(t) && $(el).children().length > 1;
+    }).slice(0, 5);
+    cards.forEach((el) => lines.push(`KARTE <${el.tagName} class="${$(el).attr("class") || ""}">: ${textWithSpaces(el).slice(0, 300)}`));
+    $("script,style,noscript").remove();
+    const text = $("body").text().replace(/\s+/g, " ");
+    let idx = 0;
+    for (let n = 0; n < 6; n++) {
+      const i = text.toLowerCase().indexOf("monster", idx);
+      if (i < 0) break;
+      lines.push(`TEXT: …${text.slice(Math.max(0, i - 120), i + 220)}…`);
+      idx = i + 400;
+    }
+  } catch (e) {
+    lines.push(`FEHLER ${e?.message || e}`);
+  }
+  res.type("text/plain").send(lines.join("\n\n"));
 });
 
 app.get("/health", (_, res) => res.send("ok"));
