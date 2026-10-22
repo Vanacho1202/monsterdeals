@@ -709,7 +709,74 @@ function makeTiendeoScraper(tld) {
   return fn;
 }
 
-const SCRAPERS_DE = [scrapeTrinkgut, scrapeKaufland, scrapeAldiNord, scrapeMeinprospekt, makeTiendeoScraper("de")];
+/**
+ * Scraper: energy-angebote.de (Preisvergleich nur für Energy Drinks).
+ * Sammelt Monster-Energy-0,5-l-Angebote aus sehr vielen Prospekten,
+ * auch von Getränkemärkten (HIT, HOL'AB, K+K, Alldrink, GetränkeLAND ...),
+ * die sonst keine Quelle abdeckt. Die Seite liefert strukturierte Daten
+ * (JSON-LD: Product -> AggregateOffer -> Offer mit seller, price,
+ * priceValidUntil). Fallback: Textliste "<Händler> bis TT.MM.JJJJ Preis: 0,99 €".
+ * Die Seite bezieht sich auf die 0,5-l-Dose, deshalb Preis = Dosenpreis.
+ */
+function collectLdOffers(node, out) {
+  if (!node || typeof node !== "object") return;
+  if (Array.isArray(node)) return node.forEach((n) => collectLdOffers(n, out));
+  const type = [].concat(node["@type"] || []);
+  if (type.includes("Offer") && node.price != null) out.push(node);
+  for (const v of Object.values(node)) if (v && typeof v === "object") collectLdOffers(v, out);
+}
+
+function isoToDe(iso) {
+  return formatDate(String(iso || "").slice(0, 10));
+}
+
+async function scrapeEnergyAngebote(query) {
+  if (!query.toLowerCase().includes("monster")) return [];
+  const url = "https://energy-angebote.de/monster-energy-0-5l";
+  const html = await fetchHtml(url);
+  const $ = cheerio.load(html);
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Berlin" });
+  const out = [];
+  const add = (storeName, price, validUntilIso, validFromIso = "") => {
+    storeName = String(storeName || "").trim();
+    if (!storeName || Number.isNaN(price) || price <= 0 || price > 5) return;
+    if (validUntilIso && validUntilIso < today) return; // abgelaufen
+    if (validFromIso && validFromIso > today) return; // startet erst später
+    out.push({
+      storeName,
+      product: "Monster Energy 0,5 l",
+      packInfo: "Einzeldose",
+      price,
+      deposit: 0.25,
+      regularPrice: null,
+      validUntil: isoToDe(validUntilIso),
+      source: url
+    });
+  };
+
+  const ldOffers = [];
+  $('script[type="application/ld+json"]').each((_, el) => {
+    try { collectLdOffers(JSON.parse($(el).html() || ""), ldOffers); } catch { /* kaputter Block */ }
+  });
+  for (const o of ldOffers) {
+    const seller = typeof o.seller === "string" ? o.seller : o.seller?.name;
+    add(seller, parseFloat(String(o.price).replace(",", ".")), String(o.priceValidUntil || "").slice(0, 10), String(o.validFrom || "").slice(0, 10));
+  }
+
+  // Fallback ohne JSON-LD: "Penny bis 24.10.2026 Preis: 0,99 €"
+  if (out.length === 0) {
+    $("script,style,noscript").remove();
+    const text = $("body").text().replace(/\s+/g, " ");
+    const re = /([A-Za-zÄÖÜäöüß'+.\- ]{2,30}?) bis (\d{2})\.(\d{2})\.(\d{4}) Preis: (\d+,\d{2}) €/g;
+    let m;
+    while ((m = re.exec(text))) add(m[1], parseFloat(m[5].replace(",", ".")), `${m[4]}-${m[3]}-${m[2]}`);
+  }
+  console.log(`energy-angebote.de: ${ldOffers.length} JSON-LD-Offers, ${out.length} gültige Angebote`);
+  if (!/monster/i.test($("title").text())) throw new Error("energy-angebote.de: unerwartete Seite");
+  return out;
+}
+
+const SCRAPERS_DE = [scrapeTrinkgut, scrapeKaufland, scrapeAldiNord, scrapeMeinprospekt, scrapeEnergyAngebote, makeTiendeoScraper("de")];
 const SCRAPERS_IT = [scrapeVolantinofacileIT, scrapeTuttiScontiIT, makeTiendeoScraper("it")];
 
 // Je Land: Scraper + Filialsuche. storeOsmTag "" = keine Einschränkung (wie
@@ -784,7 +851,10 @@ function dedupe(offers, keyFn) {
     return true;
   });
 }
-const offerKey = (o) => `${normText(o.storeName)}|${normText(o.product).replace(/[^a-z0-9]+/g, " ").trim()}|${o.price}`;
+// Kette + Preis: dasselbe Angebot heißt je nach Quelle anders ("Monster
+// Energy-Drink" vs. "Monster Energy 0,5 l"). Die zuerst gelistete Quelle
+// gewinnt (meinprospekt vor energy-angebote, weil mit Streichpreis).
+const offerKey = (o) => `${normText(o.storeName).replace(/[^a-z0-9]+/g, "")}|${o.price}`;
 
 const DEFAULT_RADIUS_KM = 25;
 const MAX_RADIUS_KM = 100;
@@ -831,7 +901,7 @@ app.get("/offers", async (req, res) => {
     const country = place.countryCode || "DE";
     const cfg = COUNTRIES[country];
     if (!cfg) return res.json([]); // Land (noch) nicht unterstützt
-    const key = `v2|${country}|${place.city}|${brandQuery}`;
+    const key = `v3|${country}|${place.city}|${brandQuery}`;
 
     const hit = cache.get(key);
     if (hit && Date.now() - hit.time < CACHE_MS) {
@@ -861,7 +931,10 @@ app.get("/offers", async (req, res) => {
       if (!branches) {
         if (branchMemo.size >= MAX_GEOCODED_STORES) continue;
         try {
-          branches = await geocodeStores(o.storeName, lat, lon, 3, 100, country, cfg.storeOsmTag);
+          // Kurze Namen wie "HIT" oder "K+K" nur unter Läden suchen, sonst
+          // treffen sie Orte/Straßen.
+          const osmTag = cfg.storeOsmTag || (o.storeName.replace(/[^A-Za-z]/g, "").length <= 4 ? "shop" : "");
+          branches = await geocodeStores(o.storeName, lat, lon, 3, 100, country, osmTag);
         } catch (e) {
           console.error(`geocodeStores(${o.storeName}) failed:`, e?.message || e);
           branches = [];
