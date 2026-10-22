@@ -1001,8 +1001,8 @@ function findJsonPaths(node, path, out, depth = 0) {
   for (const [k, v] of Object.entries(node)) findJsonPaths(v, `${path}.${k}`, out, depth + 1);
 }
 
-app.get("/debug/probe", async (req, res) => {
-  const src = String(req.query.src || "");
+app.get("/debug/probe/:src", async (req, res) => {
+  const src = String(req.params.src || "");
   const url = PROBE_SOURCES[src];
   if (!url) return res.status(400).type("text/plain").send(`src = ${Object.keys(PROBE_SOURCES).join(" | ")}`);
   const lines = [];
