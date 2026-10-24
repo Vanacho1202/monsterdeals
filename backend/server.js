@@ -147,26 +147,91 @@ async function geocodeStoresCached(name, nearLat, nearLon, maxResults, maxKm, co
 // Fällt Photon aus (z.B. ECONNREFUSED oder Rate-Limit), springt die
 // Filialsuche auf OpenStreetMap Overpass um. Danach 10 Minuten lang Photon
 // gar nicht erst fragen, damit nicht jede Kette erst in den Fehler läuft.
-const PHOTON_PAUSE_MS = 10 * 60 * 1000;
-let photonDownUntil = 0;
+// Reihenfolge der Dienste; jeder ausgefallene Dienst wird 10 Minuten
+// übersprungen. Sonst läuft jede Kette einzeln in Fehler/Timeouts und die
+// App-Anfrage dauert länger als das 60-s-Timeout der App.
+const GEOCODE_PAUSE_MS = 10 * 60 * 1000;
+const geocodeDownUntil = { Photon: 0, Overpass: 0, Nominatim: 0 };
 
 async function geocodeStores(name, nearLat, nearLon, maxResults = 3, maxKm = 100, countryCode = "DE", osmTag = "") {
-  let photonErr = null;
-  if (Date.now() >= photonDownUntil) {
+  const providers = [
+    ["Photon", () => geocodeStoresPhoton(name, nearLat, nearLon, maxResults, maxKm, countryCode, osmTag)],
+    ["Overpass", () => geocodeStoresOverpass(name, nearLat, nearLon, maxResults, maxKm, countryCode)],
+    ["Nominatim", () => geocodeStoresNominatim(name, nearLat, nearLon, maxResults, maxKm, countryCode)]
+  ];
+  const errors = [];
+  for (const [label, run] of providers) {
+    if (Date.now() < geocodeDownUntil[label]) { errors.push(`${label} pausiert`); continue; }
     try {
-      return await geocodeStoresPhoton(name, nearLat, nearLon, maxResults, maxKm, countryCode, osmTag);
+      return await run();
     } catch (e) {
-      photonErr = e;
-      photonDownUntil = Date.now() + PHOTON_PAUSE_MS;
-      console.error(`Photon für ${name} ausgefallen (${e?.message || e}) - nutze Overpass`);
+      geocodeDownUntil[label] = Date.now() + GEOCODE_PAUSE_MS;
+      errors.push(`${label}: ${e?.message || e}`);
+      console.error(`${label} für ${name} ausgefallen (${e?.message || e}) - 10 min pausiert`);
     }
   }
-  try {
-    return await geocodeStoresOverpass(name, nearLat, nearLon, maxResults, maxKm, countryCode);
-  } catch (e) {
-    const why = photonErr ? `Photon: ${photonErr?.message || photonErr}; ` : "Photon pausiert; ";
-    throw new Error(`${why}Overpass: ${e?.message || e}`);
+  throw new Error(errors.join("; "));
+}
+
+/* ---------- Filialsuche-Ersatz 2: Nominatim (OSM) ---------- */
+// Nutzungsregeln: max. 1 Anfrage/s, eindeutiger User-Agent. Die Filialsuche
+// wartet ohnehin 1,1 s zwischen den Ketten und cacht 24 h.
+async function geocodeStoresNominatim(name, nearLat, nearLon, maxResults = 3, maxKm = 100, countryCode = "DE") {
+  const km = Math.min(maxKm, OVERPASS_MAX_KM);
+  const dLat = km / 111;
+  const dLon = km / (111 * Math.cos((nearLat * Math.PI) / 180));
+  const viewbox = [nearLon - dLon, nearLat + dLat, nearLon + dLon, nearLat - dLat].map((x) => x.toFixed(4)).join(",");
+  const search = async (q) => {
+    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=jsonv2&addressdetails=1&extratags=1` +
+      `&limit=40&bounded=1&viewbox=${viewbox}&countrycodes=${countryCode.toLowerCase()}`;
+    const r = await fetch(url, {
+      headers: { "User-Agent": "MonsterDeals/1.0 (github.com/Vanacho1202/monsterdeals)", "Accept-Language": "de" },
+      signal: AbortSignal.timeout(8000)
+    });
+    const body = await r.text();
+    if (!r.ok || !body.trim().startsWith("[")) throw new Error(`HTTP ${r.status} (kein JSON)`);
+    return JSON.parse(body);
+  };
+  const nameRe = new RegExp(`(^|[^a-z0-9])${name.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^a-z0-9])`, "i");
+  let places = await search(name);
+  // "Netto Marken-Discount" heißt in OSM meist nur "Netto" (Marke steht in
+  // brand) - dann mit dem ersten Wort nochmal suchen; der Namens-/Marken-
+  // Filter unten sortiert fremde Läden wieder aus.
+  const first = name.trim().split(/\s+/)[0];
+  if (!places.some((p) => p.category === "shop") && first !== name.trim()) {
+    await new Promise((res) => setTimeout(res, 1100)); // 1 Anfrage/s
+    places = await search(first);
   }
+  const candidates = places
+    .filter((p) => p.category === "shop" || p.class === "shop")
+    .filter((p) => nameRe.test(p.name || "") || nameRe.test(p.extratags?.brand || ""))
+    .map((p) => {
+      const a = p.address || {};
+      const lat = parseFloat(p.lat);
+      const lon = parseFloat(p.lon);
+      let label = p.name || p.extratags?.brand || "";
+      const brand = p.extratags?.brand;
+      if (brand && !label.toLowerCase().includes(brand.toLowerCase())) label = brand;
+      const city = a.city || a.town || a.village || a.municipality || "";
+      return {
+        lat,
+        lon,
+        address: [label, a.road, a.house_number, a.postcode, city].filter(Boolean).join(", "),
+        state: a.state || "",
+        distanceKm: haversineKm(nearLat, nearLon, lat, lon)
+      };
+    })
+    .filter((c) => c.distanceKm <= km)
+    .sort((a, b) => a.distanceKm - b.distanceKm);
+  const seen = new Set();
+  const unique = [];
+  for (const c of candidates) {
+    if (seen.has(c.address)) continue;
+    seen.add(c.address);
+    unique.push(c);
+    if (unique.length >= maxResults) break;
+  }
+  return unique;
 }
 
 /* ---------- Filialsuche-Ersatz: OpenStreetMap Overpass ---------- */
@@ -253,7 +318,7 @@ async function geocodeStoresOverpass(name, nearLat, nearLon, maxResults = 3, max
         method: "POST",
         headers: { "User-Agent": "MonsterDeals/1.0 (Filialsuche)", "Content-Type": "application/x-www-form-urlencoded" },
         body: "data=" + encodeURIComponent(query),
-        signal: AbortSignal.timeout(20000)
+        signal: AbortSignal.timeout(8000)
       });
       const body = await r.text();
       if (!r.ok || !body.trim().startsWith("{")) throw new Error(`HTTP ${r.status} (kein JSON)`);
