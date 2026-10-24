@@ -934,9 +934,20 @@ const MAX_GEOCODED_STORES = 30;
  */
 const DAILY_URL_PATH = "/offers?lat=50.80&lon=8.77&radiusKm=25&q=Monster+Energy&daily=1";
 
-function logDaily(result, lat, lon) {
+function logDaily(result, lat, lon, rawIfGeocodeFailed = null) {
   // Gleiche Kette + Produkt + Preis zusammenfassen, max. 3 Adressen je Angebot
   const groups = new Map();
+  // Ist die Filialsuche (Photon) ausgefallen, die Angebote trotzdem melden -
+  // nur eben ohne Adressen, statt eine leere Liste zu schicken.
+  if (rawIfGeocodeFailed) {
+    for (const o of rawIfGeocodeFailed) {
+      if (o.price == null) continue;
+      const k = `${o.storeName}|${o.product}|${o.price}`;
+      if (!groups.has(k)) groups.set(k, { store: o.storeName, product: o.product, price: o.price, deposit: o.deposit,
+        regularPrice: o.regularPrice, validUntil: o.validUntil, packInfo: o.packInfo, branches: [],
+        note: "Filialsuche ausgefallen - Filialen im Umkreis nicht geprüft" });
+    }
+  }
   for (const o of result) {
     const k = `${o.storeName}|${o.product}|${o.price}`;
     const d = Math.round(haversineKm(lat, lon, o.lat, o.lon) * 10) / 10;
@@ -946,6 +957,7 @@ function logDaily(result, lat, lon) {
             regularPrice: o.regularPrice, validUntil: o.validUntil, packInfo: o.packInfo, branches: [] };
       groups.set(k, g);
     }
+    delete g.note;
     if (g.branches.length < 3) g.branches.push(`${o.storeAddress} (${d} km)`);
   }
   const list = [...groups.values()].sort((a, b) => (a.price ?? 99) - (b.price ?? 99));
@@ -1057,7 +1069,7 @@ app.get("/offers", async (req, res) => {
     // nächsten Aufruf neu versuchen (gefundene Filialen sind ohnehin gecacht).
     if (!geocodeFailed && settled.some((r) => r.status === "fulfilled")) cache.set(key, { time: Date.now(), offers });
     const result = forClient(offers, req, lat, lon);
-    if (req.query.daily === "1") logDaily(result, lat, lon);
+    if (req.query.daily === "1") logDaily(result, lat, lon, geocodeFailed ? raw : null);
     res.json(result);
   } catch (e) {
     console.error(e);
