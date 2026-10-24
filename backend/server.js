@@ -925,6 +925,38 @@ const REGIONAL_CHAINS = {
 // Obergrenze für Filial-Suchen pro Anfrage (Photon ist ein öffentlicher Dienst)
 const MAX_GEOCODED_STORES = 30;
 
+/* ---------- Täglicher Check (für die Morgen-Mail) ----------
+ * Die geplante Claude-Aufgabe kann den Server nicht zuverlässig per HTTP
+ * abfragen. Deshalb schreibt der Server das Ergebnis für Marburg als
+ * kompakte JSON-Zeile ins Log ("DAILY_OFFERS {...}"); die Aufgabe liest sie
+ * über den Render-Connector aus. Ausgelöst wird der Check bei jedem Start
+ * und bei Anfragen mit daily=1.
+ */
+const DAILY_URL_PATH = "/offers?lat=50.80&lon=8.77&radiusKm=25&q=Monster+Energy&daily=1";
+
+function logDaily(result, lat, lon) {
+  // Gleiche Kette + Produkt + Preis zusammenfassen, max. 3 Adressen je Angebot
+  const groups = new Map();
+  for (const o of result) {
+    const k = `${o.storeName}|${o.product}|${o.price}`;
+    const d = Math.round(haversineKm(lat, lon, o.lat, o.lon) * 10) / 10;
+    let g = groups.get(k);
+    if (!g) {
+      g = { store: o.storeName, product: o.product, price: o.price, deposit: o.deposit,
+            regularPrice: o.regularPrice, validUntil: o.validUntil, packInfo: o.packInfo, branches: [] };
+      groups.set(k, g);
+    }
+    if (g.branches.length < 3) g.branches.push(`${o.storeAddress} (${d} km)`);
+  }
+  const list = [...groups.values()].sort((a, b) => (a.price ?? 99) - (b.price ?? 99));
+  // Render-Logzeilen kurz halten: in Stücke à 20 Angebote aufteilen
+  const at = new Date().toISOString();
+  const parts = Math.max(1, Math.ceil(list.length / 20));
+  for (let i = 0; i < parts; i++) {
+    console.log("DAILY_OFFERS " + JSON.stringify({ at, part: i + 1, parts, total: list.length, offers: list.slice(i * 20, i * 20 + 20) }));
+  }
+}
+
 /* ---------- Endpunkt ---------- */
 app.get("/offers", async (req, res) => {
   try {
@@ -946,7 +978,9 @@ app.get("/offers", async (req, res) => {
 
     const hit = cache.get(key);
     if (hit && Date.now() - hit.time < CACHE_MS) {
-      return res.json(forClient(hit.offers, req, lat, lon));
+      const result = forClient(hit.offers, req, lat, lon);
+      if (req.query.daily === "1") logDaily(result, lat, lon);
+      return res.json(result);
     }
 
     const settled = await Promise.allSettled(cfg.scrapers.map((fn) => cachedScrape(fn, brandQuery)));
@@ -1022,7 +1056,9 @@ app.get("/offers", async (req, res) => {
     // Ist eine Filialsuche fehlgeschlagen, nicht 6 h festhalten - beim
     // nächsten Aufruf neu versuchen (gefundene Filialen sind ohnehin gecacht).
     if (!geocodeFailed && settled.some((r) => r.status === "fulfilled")) cache.set(key, { time: Date.now(), offers });
-    res.json(forClient(offers, req, lat, lon));
+    const result = forClient(offers, req, lat, lon);
+    if (req.query.daily === "1") logDaily(result, lat, lon);
+    res.json(result);
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: String(e) });
@@ -1175,4 +1211,13 @@ app.get("/debug/probe/:src", async (req, res) => {
 });
 
 app.get("/health", (_, res) => res.send("ok"));
-app.listen(PORT, () => console.log(`läuft auf :${PORT}`));
+app.listen(PORT, () => {
+  console.log(`läuft auf :${PORT}`);
+  // Nach dem Start einmal den Marburg-Check fahren, damit ein frisches
+  // DAILY_OFFERS im Log steht.
+  setTimeout(() => {
+    fetch(`http://localhost:${PORT}${DAILY_URL_PATH}`)
+      .then((r) => r.text())
+      .catch((e) => console.log("DAILY_OFFERS_ERROR " + (e?.message || e)));
+  }, 3000);
+});
