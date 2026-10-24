@@ -144,7 +144,129 @@ async function geocodeStoresCached(name, nearLat, nearLon, maxResults, maxKm, co
   return { branches, cached: false };
 }
 
+// Fällt Photon aus (z.B. ECONNREFUSED oder Rate-Limit), springt die
+// Filialsuche auf OpenStreetMap Overpass um. Danach 10 Minuten lang Photon
+// gar nicht erst fragen, damit nicht jede Kette erst in den Fehler läuft.
+const PHOTON_PAUSE_MS = 10 * 60 * 1000;
+let photonDownUntil = 0;
+
 async function geocodeStores(name, nearLat, nearLon, maxResults = 3, maxKm = 100, countryCode = "DE", osmTag = "") {
+  let photonErr = null;
+  if (Date.now() >= photonDownUntil) {
+    try {
+      return await geocodeStoresPhoton(name, nearLat, nearLon, maxResults, maxKm, countryCode, osmTag);
+    } catch (e) {
+      photonErr = e;
+      photonDownUntil = Date.now() + PHOTON_PAUSE_MS;
+      console.error(`Photon für ${name} ausgefallen (${e?.message || e}) - nutze Overpass`);
+    }
+  }
+  try {
+    return await geocodeStoresOverpass(name, nearLat, nearLon, maxResults, maxKm, countryCode);
+  } catch (e) {
+    const why = photonErr ? `Photon: ${photonErr?.message || photonErr}; ` : "Photon pausiert; ";
+    throw new Error(`${why}Overpass: ${e?.message || e}`);
+  }
+}
+
+/* ---------- Filialsuche-Ersatz: OpenStreetMap Overpass ---------- */
+const OVERPASS_URLS = [
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter"
+];
+// Overpass sucht im Umkreis um den Standort; mehr als 50 km macht die
+// Abfrage langsam und liegt ohnehin über dem Standard-Radius der App (25 km).
+const OVERPASS_MAX_KM = 50;
+
+// Kettenname als Regex für Overpass (POSIX ERE, ohne Groß-/Kleinschreibung).
+// Nur ganze Wörter treffen, damit "HIT" nicht "Fahrrad Hitzler" findet.
+function overpassNameRegex(name) {
+  const esc = name.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = `(^|[^a-z0-9])${esc}($|[^a-z0-9])`;
+  // In Overpass-QL-Strings müssen Backslashes und Anführungszeichen escaped werden
+  return re.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function buildOverpassQuery(name, lat, lon, radiusM) {
+  const re = overpassNameRegex(name);
+  return `[out:json][timeout:20];
+(
+  nwr["shop"]["name"~"${re}",i](around:${radiusM},${lat},${lon});
+  nwr["shop"]["brand"~"${re}",i](around:${radiusM},${lat},${lon});
+);
+out center tags 40;
+is_in(${lat},${lon})->.a;
+area.a["admin_level"="4"];
+out tags;`;
+}
+
+// Overpass-Antwort in dasselbe Format wie die Photon-Treffer bringen.
+function parseOverpass(j, nearLat, nearLon, maxResults, maxKm, countryCode) {
+  const els = j.elements || [];
+  // Bundesland/Region des Standorts (Overpass liefert es nicht je Laden);
+  // nötig für den REGIONAL_CHAINS-Filter.
+  const areas = els.filter((e) => e.type === "area");
+  const homeState = areas[0]?.tags?.name || "";
+  const homeCountry = (areas[0]?.tags?.["ISO3166-2"] || "").slice(0, 2).toUpperCase();
+  const candidates = els
+    .filter((e) => e.type !== "area")
+    .map((e) => {
+      const t = e.tags || {};
+      const lat = e.lat ?? e.center?.lat;
+      const lon = e.lon ?? e.center?.lon;
+      if (lat == null || lon == null) return null;
+      const country = (t["addr:country"] || homeCountry || countryCode).toUpperCase();
+      if (country !== countryCode) return null;
+      // Netto Marken-Discount heißt in OSM oft nur "Netto" (Marke in brand).
+      // Die Marke in den Namen nehmen, damit der Scottie-Netto-Filter greift.
+      let label = t.name || t.brand || "";
+      if (t.brand && !label.toLowerCase().includes(t.brand.toLowerCase())) label = t.brand;
+      const city = t["addr:city"] || t["addr:place"] || "";
+      return {
+        lat,
+        lon,
+        address: [label, t["addr:street"], t["addr:housenumber"], t["addr:postcode"], city].filter(Boolean).join(", "),
+        state: t["addr:state"] || homeState,
+        distanceKm: haversineKm(nearLat, nearLon, lat, lon)
+      };
+    })
+    .filter((c) => c && c.distanceKm <= maxKm)
+    .sort((a, b) => a.distanceKm - b.distanceKm);
+  const seen = new Set();
+  const unique = [];
+  for (const c of candidates) {
+    if (seen.has(c.address)) continue;
+    seen.add(c.address);
+    unique.push(c);
+    if (unique.length >= maxResults) break;
+  }
+  return unique;
+}
+
+async function geocodeStoresOverpass(name, nearLat, nearLon, maxResults = 3, maxKm = 100, countryCode = "DE") {
+  const km = Math.min(maxKm, OVERPASS_MAX_KM);
+  const query = buildOverpassQuery(name, nearLat, nearLon, Math.round(km * 1000));
+  let lastErr;
+  for (const url of OVERPASS_URLS) {
+    try {
+      const r = await fetch(url, {
+        method: "POST",
+        headers: { "User-Agent": "MonsterDeals/1.0 (Filialsuche)", "Content-Type": "application/x-www-form-urlencoded" },
+        body: "data=" + encodeURIComponent(query),
+        signal: AbortSignal.timeout(20000)
+      });
+      const body = await r.text();
+      if (!r.ok || !body.trim().startsWith("{")) throw new Error(`HTTP ${r.status} (kein JSON)`);
+      return parseOverpass(JSON.parse(body), nearLat, nearLon, maxResults, km, countryCode);
+    } catch (e) {
+      lastErr = e;
+      console.error(`Overpass ${new URL(url).host} für ${name} fehlgeschlagen:`, e?.message || e);
+    }
+  }
+  throw lastErr;
+}
+
+async function geocodeStoresPhoton(name, nearLat, nearLon, maxResults = 3, maxKm = 100, countryCode = "DE", osmTag = "") {
   // NUR den Kettennamen suchen, ohne Stadt im Suchtext: Photons Textsuche
   // kombiniert "Kette, kleiner Ort" oft schlecht (fand z.B. für "Lidl,
   // Amöneburg" NICHTS, obwohl "Lidl" allein + lat/lon-Gewichtung sofort
