@@ -942,6 +942,11 @@ function logDaily(result, lat, lon, rawIfGeocodeFailed = null) {
   if (rawIfGeocodeFailed) {
     for (const o of rawIfGeocodeFailed) {
       if (o.price == null) continue;
+      // Regionale Ketten lassen sich ohne Filialsuche nicht prüfen - weglassen,
+      // sonst stehen Ketten aus Nord-/Ostdeutschland in der Marburg-Mail.
+      const nk = normText(o.storeName).replace(/[^a-z0-9]/g, "");
+      if (Object.keys(REGIONAL_CHAINS).some((k) => nk.startsWith(k))) continue;
+      if (/^netto\b/i.test(o.storeName) && !/marken/i.test(o.storeName)) continue;
       const k = `${o.storeName}|${o.product}|${o.price}`;
       if (!groups.has(k)) groups.set(k, { store: o.storeName, product: o.product, price: o.price, deposit: o.deposit,
         regularPrice: o.regularPrice, validUntil: o.validUntil, packInfo: o.packInfo, branches: [],
