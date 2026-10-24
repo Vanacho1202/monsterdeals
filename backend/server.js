@@ -105,8 +105,18 @@ function haversineKm(lat1, lon1, lat2, lon2) {
 /* ---------- Geocoding über Photon (OSM-basiert) ---------- */
 async function reverseGeocode(lat, lon) {
   const url = `https://photon.komoot.io/reverse?lat=${lat}&lon=${lon}`;
-  const r = await fetch(url, { headers: { "User-Agent": UA } });
-  const j = await r.json();
+  // Fällt Photon aus (Verbindung abgelehnt, Rate-Limit-HTML statt JSON),
+  // darf das nicht die ganze /offers-Anfrage mit 500 abbrechen: dann ohne
+  // Ort weitermachen, /offers nimmt in dem Fall Deutschland an.
+  let j = {};
+  try {
+    const r = await fetch(url, { headers: { "User-Agent": UA } });
+    const body = await r.text();
+    if (r.ok && body.trim().startsWith("{")) j = JSON.parse(body);
+    else console.error(`reverseGeocode: Photon HTTP ${r.status} (kein JSON)`);
+  } catch (e) {
+    console.error("reverseGeocode failed:", e?.message || e);
+  }
   const p = j.features?.[0]?.properties || {};
   return {
     city: p.city || p.town || p.village || p.district || "",
