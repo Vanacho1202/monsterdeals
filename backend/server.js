@@ -1022,11 +1022,19 @@ async function scrapeDiscounto(query) {
   $("script,style,noscript").remove();
   const out = [];
   const seen = new Set();
-  $("h1,h2,h3,h4,h5,h6").each((_, h) => {
-    const product = $(h).text().replace(/\s+/g, " ").trim();
-    if (!/monster/i.test(product) || !$(h).find("a").length && !$(h).closest("a").length) return;
+  // Nur echte Angebots-Links ("/Angebot/<slug>-<id>/", per WebFetch
+  // bestätigt), nicht jede Überschrift mit "monster" - die Seite hat weiter
+  // unten einen SEO-Textblock mit Sätzen wie "Monster Energy bei Penny", der
+  // sonst als eigenes (erfundenes) Angebot durchging.
+  const seenHref = new Set();
+  $("a[href*='/Angebot/']").each((_, a) => {
+    const href = $(a).attr("href") || "";
+    if (!/\/Angebot\/[^/]+-\d+\/?$/i.test(href) || seenHref.has(href)) return;
+    seenHref.add(href);
+    const product = $(a).text().replace(/\s+/g, " ").trim() || $(a).closest("h1,h2,h3,h4,h5,h6").text().replace(/\s+/g, " ").trim();
+    if (!/monster/i.test(product)) return;
     // Nach oben bis zur Karte: erstes Element mit Bild UND Preis
-    let card = $(h).parent();
+    let card = $(a).parent();
     for (let i = 0; i < 6 && card.length; i++) {
       if (card.find("img").length && /\d+,\d{2}\s*€/.test(textWithSpaces(card[0]))) break;
       card = card.parent();
