@@ -996,87 +996,75 @@ async function scrapeEnergyAngebote(query) {
 }
 
 /**
- * Scraper: prospektangebote.de (Prospekt-Aggregator).
- * Bringt Ketten, die die anderen Quellen oft nicht haben (Penny, Netto
- * Marken-Discount, nahkauf, Wasgau, Handelshof ...). Die Übersichtsseite
- * "Energy" verlinkt jedes Angebot als /geschaefte/<kette>/angebote/<slug>/;
- * die Detailseite hat Titel "<Produkt> Angebot bei <Kette>", direkt nach der
- * Überschrift Streich- und Angebotspreis ("€1,59 €0,89") und den Satz
- * "... ist von 16-11-2026 bis 21-11-2026". Noch nicht gültige oder
- * abgelaufene Angebote werden übersprungen (wie bei energy-angebote.de).
+ * Scraper: discounto.de (Prospekt-Aggregator), Seite "Monster Energy" in der
+ * Gruppe Energy-Drinks. Bringt u.a. Netto Marken-Discount, das die anderen
+ * Quellen oft nicht haben.
+ * (prospektangebote.de wurde ebenfalls versucht, liefert Render-Servern aber
+ * nur eine leere HTTP-202-Antwort - Bot-Prüfung für Cloud-IPs, wird bewusst
+ * nicht umgangen.)
+ * Aufbau je Angebot: Logo-Bild der Kette (alt = Kettenname), Produktbild,
+ * Überschrift mit Link zum Angebot, dann "0,79 € 1,59 €" (Preis, Streichpreis).
+ * Abgelaufene Angebote stehen darunter ohne Preis und fallen dadurch raus.
+ * Die Seite nennt kein Enddatum -> validUntil bleibt leer.
  */
-const PA_BASE = "https://www.prospektangebote.de";
-const PA_MAX_DETAILS = 25;
+const DISCOUNTO_URL = "https://www.discounto.de/Aktuelle-Angebote/Monster-Energy/Angebot-Gruppe:Energy-Drinks/";
 
 function niceChainName(s) {
-  s = String(s || "").trim();
-  // "PENNY" -> "Penny" (Filialsuche/Anzeige), kurze Kürzel wie "LOGO" bleiben
+  s = String(s || "").replace(/^(logo|prospekt)\s*[-:]?\s*/i, "").replace(/\s+(logo|prospekt|angebote)$/i, "").trim();
+  // "ALDI Nord" bleibt, "PENNY" -> "Penny" (Anzeige/Filialsuche), Kürzel wie "LOGO" bleiben
   return s.length > 4 && s === s.toUpperCase() ? s.charAt(0) + s.slice(1).toLowerCase() : s;
 }
 
-async function scrapeProspektangebote(query) {
+async function scrapeDiscounto(query) {
   if (!query.toLowerCase().includes("monster")) return [];
-  const listUrl = `${PA_BASE}/angebote/energy`;
-  const $ = cheerio.load(await fetchHtml(listUrl));
-  const links = new Set();
-  $("a[href*='/geschaefte/']").each((_, a) => {
-    const href = $(a).attr("href") || "";
-    if (/\/geschaefte\/[^/]+\/angebote\/[^/]*monster[^/]*\/?$/i.test(href)) links.add(new URL(href, PA_BASE).href);
-  });
-  const today = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Berlin" });
+  const html = await fetchHtml(DISCOUNTO_URL);
+  const $ = cheerio.load(html);
+  $("script,style,noscript").remove();
   const out = [];
-  let skipped = 0;
-  for (const url of [...links].slice(0, PA_MAX_DETAILS)) {
-    try {
-      const d = cheerio.load(await fetchHtml(url));
-      const title = (d("meta[property='og:title']").attr("content") || d("title").first().text() || "").trim();
-      const tm = title.match(/^(.*?)\s+Angebot bei\s+(.+)$/i);
-      const product = (d("h1").first().text() || (tm && tm[1]) || "").replace(/\s+/g, " ").trim();
-      const storeName = niceChainName(tm ? tm[2] : "");
-      d("script,style,noscript").remove();
-      const text = textWithSpaces(d("body")[0]);
-      const dm = text.match(/von (\d{2})-(\d{2})-(\d{4}) bis (\d{2})-(\d{2})-(\d{4})/);
-      const fromIso = dm ? `${dm[3]}-${dm[2]}-${dm[1]}` : "";
-      const untilIso = dm ? `${dm[6]}-${dm[5]}-${dm[4]}` : "";
-      if ((fromIso && fromIso > today) || (untilIso && untilIso < today)) { skipped++; continue; }
-      // Preise nur aus dem Kopfbereich (Überschrift bis "Hinzufügen"), sonst
-      // greift man die "ähnlichen Angebote" weiter unten.
-      const start = product ? text.indexOf(product) : 0;
-      let head = text.slice(Math.max(0, start), Math.max(0, start) + 300);
-      const cut = head.indexOf("Hinzufügen");
-      if (cut > 0) head = head.slice(0, cut);
-      const prices = [...head.matchAll(/€\s?(\d+,\d{2})|(\d+,\d{2})\s?€/g)].map((m) => parseFloat((m[1] || m[2]).replace(",", ".")));
-      if (!storeName || !product || prices.length === 0) { skipped++; continue; }
-      const total = prices.length >= 2 ? Math.min(prices[0], prices[1]) : prices[0];
-      const regular = prices.length >= 2 && Math.max(prices[0], prices[1]) > total ? Math.max(prices[0], prices[1]) : null;
-      // Stückzahl wie "4x0,5l" / "6 x 0.5 l" im Titel
-      const cm = product.match(/(\d+)\s*[x×]\s*0[.,]\d/i);
-      const count = cm ? parseInt(cm[1], 10) : 1;
-      let price = total;
-      let regularPrice = regular;
-      let packInfo;
-      if (count >= 2 && count <= 24) {
-        price = round2(total / count);
-        regularPrice = regular != null ? round2(regular / count) : null;
-        packInfo = `Nur im Mehrfachpack (${total.toFixed(2)} EUR gesamt)`;
-      } else if (total <= 1.99) {
-        packInfo = "Einzeldose";
-      } else {
-        packInfo = "Nicht eindeutig erkennbar"; // z.B. Tray zu 13,99 ohne Stückzahl
-      }
-      out.push({ storeName, product, packInfo, price, deposit: 0.25, regularPrice, validUntil: formatDate(untilIso), source: url });
-    } catch (e) {
-      skipped++;
-      console.error(`prospektangebote.de Detail ${url}: ${e?.message || e}`);
+  const seen = new Set();
+  $("h1,h2,h3,h4,h5,h6").each((_, h) => {
+    const product = $(h).text().replace(/\s+/g, " ").trim();
+    if (!/monster/i.test(product) || !$(h).find("a").length && !$(h).closest("a").length) return;
+    // Nach oben bis zur Karte: erstes Element mit Bild UND Preis
+    let card = $(h).parent();
+    for (let i = 0; i < 6 && card.length; i++) {
+      if (card.find("img").length && /\d+,\d{2}\s*€/.test(textWithSpaces(card[0]))) break;
+      card = card.parent();
     }
-    await new Promise((r) => setTimeout(r, 300));
-  }
-  console.log(`prospektangebote.de: ${links.size} Monster-Links, ${out.length} gültige Angebote, ${skipped} übersprungen (${[...new Set(out.map((o) => o.storeName))].join(", ")})`);
-  if (links.size === 0) throw new Error("prospektangebote.de: keine Monster-Links gefunden (Layout geändert?)");
+    if (!card.length) return;
+    const text = textWithSpaces(card[0]);
+    // Karte zu groß (mehrere Angebote) -> verwerfen statt falsch zuordnen
+    if ((text.match(/monster/gi) || []).length > 3) return;
+    const prices = [...text.matchAll(/(\d+,\d{2})\s*€/g)].map((m) => parseFloat(m[1].replace(",", ".")));
+    if (!prices.length) return;
+    const alts = card.find("img").toArray().map((im) => ($(im).attr("alt") || "").trim()).filter(Boolean);
+    const storeName = niceChainName(alts.find((a) => !/monster/i.test(a)) || "");
+    if (!storeName) return;
+    const total = prices[0];
+    const regular = prices.length >= 2 && prices[1] > total ? prices[1] : null;
+    const cm = product.match(/(\d+)\s*[x×]\s*0[.,]\d/i);
+    const count = cm ? parseInt(cm[1], 10) : 1;
+    let price = total, regularPrice = regular, packInfo;
+    if (count >= 2 && count <= 24) {
+      price = round2(total / count);
+      regularPrice = regular != null ? round2(regular / count) : null;
+      packInfo = `Nur im Mehrfachpack (${total.toFixed(2)} EUR gesamt)`;
+    } else if (total <= 1.99) {
+      packInfo = "Einzeldose";
+    } else {
+      packInfo = "Nicht eindeutig erkennbar";
+    }
+    const k = `${storeName}|${product}|${total}`;
+    if (seen.has(k)) return;
+    seen.add(k);
+    out.push({ storeName, product, packInfo, price, deposit: 0.25, regularPrice, validUntil: "", source: DISCOUNTO_URL });
+  });
+  console.log(`discounto.de: HTTP-Seite ${Math.round(html.length / 1024)} KB, ${out.length} Angebote (${out.map((o) => `${o.storeName} ${o.price}`).join(", ")})`);
+  if (!/monster/i.test(html)) throw new Error("discounto.de: unerwartete Seite (kein Monster im HTML)");
   return out;
 }
 
-const SCRAPERS_DE = [scrapeTrinkgut, scrapeKaufland, scrapeAldiNord, scrapeMeinprospekt, scrapeProspektangebote, scrapeEnergyAngebote, makeTiendeoScraper("de")];
+const SCRAPERS_DE = [scrapeTrinkgut, scrapeKaufland, scrapeAldiNord, scrapeMeinprospekt, scrapeDiscounto, scrapeEnergyAngebote, makeTiendeoScraper("de")];
 const SCRAPERS_IT = [scrapeVolantinofacileIT, scrapeTuttiScontiIT, makeTiendeoScraper("it")];
 
 // Je Land: Scraper + Filialsuche. storeOsmTag "" = keine Einschränkung (wie
@@ -1439,7 +1427,7 @@ const PROBE_SOURCES = {
   energy: "https://energy-angebote.de/monster-energy-0-5l",
   trinkgut: "https://www.trinkgut.de/angebote",
   meinprospekt: "https://www.meinprospekt.de/angebote/monster-energy",
-  prospektangebote: "https://www.prospektangebote.de/angebote/energy"
+  discounto: "https://www.discounto.de/Aktuelle-Angebote/Monster-Energy/Angebot-Gruppe:Energy-Drinks/"
 };
 
 function findJsonPaths(node, path, out, depth = 0) {
