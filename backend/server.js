@@ -995,7 +995,88 @@ async function scrapeEnergyAngebote(query) {
   return out;
 }
 
-const SCRAPERS_DE = [scrapeTrinkgut, scrapeKaufland, scrapeAldiNord, scrapeMeinprospekt, scrapeEnergyAngebote, makeTiendeoScraper("de")];
+/**
+ * Scraper: prospektangebote.de (Prospekt-Aggregator).
+ * Bringt Ketten, die die anderen Quellen oft nicht haben (Penny, Netto
+ * Marken-Discount, nahkauf, Wasgau, Handelshof ...). Die Übersichtsseite
+ * "Energy" verlinkt jedes Angebot als /geschaefte/<kette>/angebote/<slug>/;
+ * die Detailseite hat Titel "<Produkt> Angebot bei <Kette>", direkt nach der
+ * Überschrift Streich- und Angebotspreis ("€1,59 €0,89") und den Satz
+ * "... ist von 16-11-2026 bis 21-11-2026". Noch nicht gültige oder
+ * abgelaufene Angebote werden übersprungen (wie bei energy-angebote.de).
+ */
+const PA_BASE = "https://www.prospektangebote.de";
+const PA_MAX_DETAILS = 25;
+
+function niceChainName(s) {
+  s = String(s || "").trim();
+  // "PENNY" -> "Penny" (Filialsuche/Anzeige), kurze Kürzel wie "LOGO" bleiben
+  return s.length > 4 && s === s.toUpperCase() ? s.charAt(0) + s.slice(1).toLowerCase() : s;
+}
+
+async function scrapeProspektangebote(query) {
+  if (!query.toLowerCase().includes("monster")) return [];
+  const listUrl = `${PA_BASE}/angebote/energy`;
+  const $ = cheerio.load(await fetchHtml(listUrl));
+  const links = new Set();
+  $("a[href*='/geschaefte/']").each((_, a) => {
+    const href = $(a).attr("href") || "";
+    if (/\/geschaefte\/[^/]+\/angebote\/[^/]*monster[^/]*\/?$/i.test(href)) links.add(new URL(href, PA_BASE).href);
+  });
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Berlin" });
+  const out = [];
+  let skipped = 0;
+  for (const url of [...links].slice(0, PA_MAX_DETAILS)) {
+    try {
+      const d = cheerio.load(await fetchHtml(url));
+      const title = (d("meta[property='og:title']").attr("content") || d("title").first().text() || "").trim();
+      const tm = title.match(/^(.*?)\s+Angebot bei\s+(.+)$/i);
+      const product = (d("h1").first().text() || (tm && tm[1]) || "").replace(/\s+/g, " ").trim();
+      const storeName = niceChainName(tm ? tm[2] : "");
+      d("script,style,noscript").remove();
+      const text = textWithSpaces(d("body")[0]);
+      const dm = text.match(/von (\d{2})-(\d{2})-(\d{4}) bis (\d{2})-(\d{2})-(\d{4})/);
+      const fromIso = dm ? `${dm[3]}-${dm[2]}-${dm[1]}` : "";
+      const untilIso = dm ? `${dm[6]}-${dm[5]}-${dm[4]}` : "";
+      if ((fromIso && fromIso > today) || (untilIso && untilIso < today)) { skipped++; continue; }
+      // Preise nur aus dem Kopfbereich (Überschrift bis "Hinzufügen"), sonst
+      // greift man die "ähnlichen Angebote" weiter unten.
+      const start = product ? text.indexOf(product) : 0;
+      let head = text.slice(Math.max(0, start), Math.max(0, start) + 300);
+      const cut = head.indexOf("Hinzufügen");
+      if (cut > 0) head = head.slice(0, cut);
+      const prices = [...head.matchAll(/€\s?(\d+,\d{2})|(\d+,\d{2})\s?€/g)].map((m) => parseFloat((m[1] || m[2]).replace(",", ".")));
+      if (!storeName || !product || prices.length === 0) { skipped++; continue; }
+      const total = prices.length >= 2 ? Math.min(prices[0], prices[1]) : prices[0];
+      const regular = prices.length >= 2 && Math.max(prices[0], prices[1]) > total ? Math.max(prices[0], prices[1]) : null;
+      // Stückzahl wie "4x0,5l" / "6 x 0.5 l" im Titel
+      const cm = product.match(/(\d+)\s*[x×]\s*0[.,]\d/i);
+      const count = cm ? parseInt(cm[1], 10) : 1;
+      let price = total;
+      let regularPrice = regular;
+      let packInfo;
+      if (count >= 2 && count <= 24) {
+        price = round2(total / count);
+        regularPrice = regular != null ? round2(regular / count) : null;
+        packInfo = `Nur im Mehrfachpack (${total.toFixed(2)} EUR gesamt)`;
+      } else if (total <= 1.99) {
+        packInfo = "Einzeldose";
+      } else {
+        packInfo = "Nicht eindeutig erkennbar"; // z.B. Tray zu 13,99 ohne Stückzahl
+      }
+      out.push({ storeName, product, packInfo, price, deposit: 0.25, regularPrice, validUntil: formatDate(untilIso), source: url });
+    } catch (e) {
+      skipped++;
+      console.error(`prospektangebote.de Detail ${url}: ${e?.message || e}`);
+    }
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  console.log(`prospektangebote.de: ${links.size} Monster-Links, ${out.length} gültige Angebote, ${skipped} übersprungen (${[...new Set(out.map((o) => o.storeName))].join(", ")})`);
+  if (links.size === 0) throw new Error("prospektangebote.de: keine Monster-Links gefunden (Layout geändert?)");
+  return out;
+}
+
+const SCRAPERS_DE = [scrapeTrinkgut, scrapeKaufland, scrapeAldiNord, scrapeMeinprospekt, scrapeProspektangebote, scrapeEnergyAngebote, makeTiendeoScraper("de")];
 const SCRAPERS_IT = [scrapeVolantinofacileIT, scrapeTuttiScontiIT, makeTiendeoScraper("it")];
 
 // Je Land: Scraper + Filialsuche. storeOsmTag "" = keine Einschränkung (wie
@@ -1357,7 +1438,8 @@ const PROBE_SOURCES = {
   kaufda: "https://www.kaufda.de/Angebote/Monster-Energy",
   energy: "https://energy-angebote.de/monster-energy-0-5l",
   trinkgut: "https://www.trinkgut.de/angebote",
-  meinprospekt: "https://www.meinprospekt.de/angebote/monster-energy"
+  meinprospekt: "https://www.meinprospekt.de/angebote/monster-energy",
+  prospektangebote: "https://www.prospektangebote.de/angebote/energy"
 };
 
 function findJsonPaths(node, path, out, depth = 0) {
