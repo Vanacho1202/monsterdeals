@@ -1037,9 +1037,14 @@ async function scrapeDiscounto(query) {
     if ((text.match(/monster/gi) || []).length > 3) return;
     const prices = [...text.matchAll(/(\d+,\d{2})\s*€/g)].map((m) => parseFloat(m[1].replace(",", ".")));
     if (!prices.length) return;
-    const alts = card.find("img").toArray().map((im) => ($(im).attr("alt") || "").trim()).filter(Boolean);
-    const storeName = niceChainName(alts.find((a) => !/monster/i.test(a)) || "");
-    if (!storeName) return;
+    // Bestätigt (WebFetch): erstes Bild der Karte ist immer das Kettenlogo
+    // (Dateiname ".../pics/discounter/<id>Logo.png"), danach erst das
+    // Produktbild. Auf den Alt-Text irgendeines Bildes zu raten (frühere
+    // Version) griff bei Zusatz-Icons (z.B. "Bedingung: ... App") daneben.
+    const imgs = card.find("img").toArray();
+    const logoImg = imgs.find((im) => /discounter\//i.test($(im).attr("src") || "")) || imgs[0];
+    const storeName = niceChainName(logoImg ? ($(logoImg).attr("alt") || "").trim() : "");
+    if (!storeName || /monster/i.test(storeName)) return;
     const total = prices[0];
     const regular = prices.length >= 2 && prices[1] > total ? prices[1] : null;
     const cm = product.match(/(\d+)\s*[x×]\s*0[.,]\d/i);
