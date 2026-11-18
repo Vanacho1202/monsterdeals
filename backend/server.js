@@ -135,12 +135,15 @@ async function reverseGeocode(lat, lon) {
 // Raster) 24 h merken. Spart Photon-Anfragen und vermeidet das Rate-Limit.
 const storeCache = new Map();
 const STORE_CACHE_MS = 24 * 60 * 60 * 1000;
+const EMPTY_STORE_CACHE_MS = 30 * 60 * 1000;
 async function geocodeStoresCached(name, nearLat, nearLon, maxResults, maxKm, countryCode, osmTag) {
   const k = `${name}|${nearLat.toFixed(1)}|${nearLon.toFixed(1)}|${countryCode}|${osmTag}`;
   const hit = storeCache.get(k);
   if (hit && Date.now() - hit.time < STORE_CACHE_MS) return { branches: hit.branches, cached: true };
   const branches = await geocodeStores(name, nearLat, nearLon, maxResults, maxKm, countryCode, osmTag);
-  storeCache.set(k, { time: Date.now(), branches });
+  // Leeres Ergebnis nur kurz merken: sonst fehlt eine Kette nach einem
+  // einzigen Fehlgriff einen ganzen Tag lang (so ging Netto verloren).
+  storeCache.set(k, { time: branches.length ? Date.now() : Date.now() - STORE_CACHE_MS + EMPTY_STORE_CACHE_MS, branches });
   return { branches, cached: false };
 }
 
@@ -1009,8 +1012,15 @@ async function scrapeEnergyAngebote(query) {
  */
 const DISCOUNTO_URL = "https://www.discounto.de/Aktuelle-Angebote/Monster-Energy/Angebot-Gruppe:Energy-Drinks/";
 
+// Gleiche Kette, anderer Name je Quelle -> ein Name (sonst doppelte Angebote
+// und eine Filialsuche, die "Penny Markt" in OSM nicht findet).
+const CHAIN_ALIASES = { "penny markt": "Penny", "penny-markt": "Penny" };
+
 function niceChainName(s) {
   s = String(s || "").replace(/^(logo|prospekt)\s*[-:]?\s*/i, "").replace(/\s+(logo|prospekt|angebote)$/i, "").trim();
+  // "Bedingung: PENNY App" ist kein Logo, sondern der Hinweis "nur mit App"
+  s = s.replace(/^bedingung\s*:\s*/i, "").replace(/\s+app$/i, "").trim();
+  if (CHAIN_ALIASES[s.toLowerCase()]) return CHAIN_ALIASES[s.toLowerCase()];
   // "ALDI Nord" bleibt, "PENNY" -> "Penny" (Anzeige/Filialsuche), Kürzel wie "LOGO" bleiben
   return s.length > 4 && s === s.toUpperCase() ? s.charAt(0) + s.slice(1).toLowerCase() : s;
 }
@@ -1043,7 +1053,9 @@ async function scrapeDiscounto(query) {
     // Version) griff bei Zusatz-Icons (z.B. "Bedingung: ... App") daneben.
     const imgs = card.find("img").toArray();
     const logoImg = imgs.find((im) => /discounter\//i.test($(im).attr("src") || "")) || imgs[0];
-    const storeName = niceChainName(logoImg ? ($(logoImg).attr("alt") || "").trim() : "");
+    const rawChain = logoImg ? ($(logoImg).attr("alt") || "").trim() : "";
+    const storeName = niceChainName(rawChain);
+    const condition = /^bedingung\b.*\bapp\b/i.test(rawChain) ? `Nur mit ${storeName}-App` : undefined;
     if (!storeName || /monster/i.test(storeName)) return;
     const total = prices[0];
     const regular = prices.length >= 2 && prices[1] > total ? prices[1] : null;
@@ -1062,7 +1074,7 @@ async function scrapeDiscounto(query) {
     const k = `${storeName}|${product}|${total}`;
     if (seen.has(k)) return;
     seen.add(k);
-    out.push({ storeName, product, packInfo, price, deposit: 0.25, regularPrice, validUntil: "", source: DISCOUNTO_URL });
+    out.push({ storeName, product, packInfo, price, deposit: 0.25, regularPrice, validUntil: "", source: DISCOUNTO_URL, ...(condition ? { condition } : {}) });
   });
   console.log(`discounto.de: HTTP-Seite ${Math.round(html.length / 1024)} KB, ${out.length} Angebote (${out.map((o) => `${o.storeName} ${o.price}`).join(", ")})`);
   if (!/monster/i.test(html)) throw new Error("discounto.de: unerwartete Seite (kein Monster im HTML)");
@@ -1174,6 +1186,14 @@ function forClient(offers, req, lat, lon) {
   });
 }
 
+// Name für die Filialsuche: In OpenStreetMap heißen viele Läden kürzer als
+// in den Prospekten ("Netto Marken-Discount" -> meist nur "Netto"). Mit dem
+// langen Namen fand die Suche nichts und das Angebot fiel still weg.
+function storeSearchName(storeName) {
+  if (/^netto\s+marken/i.test(storeName)) return "Netto";
+  return storeName;
+}
+
 // Ketten, die es nur in bestimmten Bundesländern gibt (Photon-"state").
 // Schlüssel: Kettenname klein, ohne Sonder-/Leerzeichen, als Präfix.
 const REGIONAL_CHAINS = {
@@ -1220,7 +1240,8 @@ function logDaily(result, lat, lon, rawIfGeocodeFailed = null) {
     let g = groups.get(k);
     if (!g) {
       g = { store: o.storeName, product: o.product, price: o.price, deposit: o.deposit,
-            regularPrice: o.regularPrice, validUntil: o.validUntil, packInfo: o.packInfo, branches: [] };
+            regularPrice: o.regularPrice, validUntil: o.validUntil, packInfo: o.packInfo, branches: [],
+            ...(o.condition ? { condition: o.condition } : {}) };
       groups.set(k, g);
     }
     delete g.note;
@@ -1287,9 +1308,11 @@ app.get("/offers", async (req, res) => {
         try {
           // Kurze Namen wie "HIT" oder "K+K" nur unter Läden suchen, sonst
           // treffen sie Orte/Straßen.
-          const osmTag = cfg.storeOsmTag || (o.storeName.replace(/[^A-Za-z]/g, "").length <= 4 ? "shop" : "");
-          const res = await geocodeStoresCached(o.storeName, lat, lon, 3, 100, country, osmTag);
+          const searchName = storeSearchName(o.storeName);
+          const osmTag = cfg.storeOsmTag || (searchName !== o.storeName || searchName.replace(/[^A-Za-z]/g, "").length <= 4 ? "shop" : "");
+          const res = await geocodeStoresCached(searchName, lat, lon, 3, 100, country, osmTag);
           branches = res.branches;
+          if (!branches.length) console.log(`Filialsuche: keine Filiale für ${o.storeName} (gesucht: ${searchName})`);
           // Photon erlaubt etwa 1 Anfrage pro Sekunde - nur nach echten Anfragen warten
           if (!res.cached) await new Promise((r) => setTimeout(r, 1100));
         } catch (e) {
@@ -1305,6 +1328,11 @@ app.get("/offers", async (req, res) => {
       // werden - das sind zwei verschiedene Firmen mit eigenen Prospekten.
       const isScottieNetto = /^netto\b/i.test(o.storeName) && !/marken/i.test(o.storeName);
       let usable = isScottieNetto ? branches.filter((b) => !/marken/i.test(b.address)) : branches;
+      // Umgekehrt Netto Marken-Discount (gesucht als "Netto"): wo es beide
+      // Netto-Ketten gibt, nur eindeutig als Marken-Discount benannte Läden.
+      if (/^netto\b/i.test(o.storeName) && !isScottieNetto) {
+        usable = usable.filter((b) => /marken/i.test(b.address) || !REGIONAL_CHAINS.nettomitdemscottie.includes(b.state));
+      }
       // Regionale Ketten: Photon findet sonst gleichnamige, aber fremde Läden
       // (z.B. "Getränkeland Kaufmann" in Gladenbach statt der GetränkeLAND-
       // Kette aus dem Nordosten). Nur Filialen im Verbreitungsgebiet zulassen.
