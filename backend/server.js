@@ -1306,6 +1306,8 @@ app.get("/offers", async (req, res) => {
     // Netto (0,88 €, aus discounto.de) fiel hinten still heraus.
     raw.sort((a, b) => (a.price ?? 99) - (b.price ?? 99));
     const skipped = new Set();
+    const diagLogged = new Set();
+    console.log(`Rohangebote: ${raw.map((o) => `${o.storeName} ${o.price}`).join(", ")}`);
     for (const [i, o] of raw.entries()) {
       let branches = branchMemo.get(o.storeName);
       if (!branches) {
@@ -1343,6 +1345,12 @@ app.get("/offers", async (req, res) => {
       // Kette aus dem Nordosten). Nur Filialen im Verbreitungsgebiet zulassen.
       const regionKey = Object.keys(REGIONAL_CHAINS).find((k) => normText(o.storeName).replace(/[^a-z0-9]/g, "").startsWith(k));
       if (regionKey) usable = usable.filter((b) => REGIONAL_CHAINS[regionKey].includes(b.state));
+      if (!diagLogged.has(o.storeName)) {
+        diagLogged.add(o.storeName);
+        const near = (b) => b ? `${b.address} [${b.state || "?"}] (${haversineKm(lat, lon, b.lat, b.lon).toFixed(1)} km)` : "-";
+        console.log(`Filialsuche ${o.storeName} (${storeSearchName(o.storeName)}): ${branches.length} gefunden, ${usable.length} nutzbar; ` +
+          `gefunden: ${near(branches[0])}; nutzbar: ${near(usable[0])}`);
+      }
       usable.forEach((geo, j) => {
         // currency-Fallback für die älteren DE/IT-Scraper, die das Feld noch
         // nicht selbst setzen (die waren immer EUR, nie etwas anderes).
