@@ -1301,10 +1301,15 @@ app.get("/offers", async (req, res) => {
     const branchMemo = new Map();
     let geocodeFailed = false;
     const offers = [];
+    // Günstigste Angebote zuerst: Die Filialsuche ist auf MAX_GEOCODED_STORES
+    // Ketten begrenzt. Vorher entschied die Reihenfolge der Quellen, und
+    // Netto (0,88 €, aus discounto.de) fiel hinten still heraus.
+    raw.sort((a, b) => (a.price ?? 99) - (b.price ?? 99));
+    const skipped = new Set();
     for (const [i, o] of raw.entries()) {
       let branches = branchMemo.get(o.storeName);
       if (!branches) {
-        if (branchMemo.size >= MAX_GEOCODED_STORES) continue;
+        if (branchMemo.size >= MAX_GEOCODED_STORES) { skipped.add(o.storeName); continue; }
         try {
           // Kurze Namen wie "HIT" oder "K+K" nur unter Läden suchen, sonst
           // treffen sie Orte/Straßen.
@@ -1353,6 +1358,8 @@ app.get("/offers", async (req, res) => {
     }
 
     // Sicherheitsnetz: dieselbe Filiale mit demselben Angebot nur einmal
+    console.log(`Filialsuche: ${raw.length} Angebote, ${branchMemo.size} Ketten gesucht` +
+      (skipped.size ? `, übersprungen (Limit ${MAX_GEOCODED_STORES}): ${[...skipped].join(", ")}` : ""));
     const uniqueOffers = dedupe(offers, (o) => `${offerKey(o)}|${normText(o.storeAddress)}`);
     offers.length = 0;
     offers.push(...uniqueOffers);
