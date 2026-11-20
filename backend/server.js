@@ -140,7 +140,17 @@ async function geocodeStoresCached(name, nearLat, nearLon, maxResults, maxKm, co
   const k = `${name}|${nearLat.toFixed(1)}|${nearLon.toFixed(1)}|${countryCode}|${osmTag}`;
   const hit = storeCache.get(k);
   if (hit && Date.now() - hit.time < STORE_CACHE_MS) return { branches: hit.branches, cached: true };
-  const branches = await geocodeStores(name, nearLat, nearLon, maxResults, maxKm, countryCode, osmTag);
+  let branches;
+  try {
+    branches = await geocodeStores(name, nearLat, nearLon, maxResults, maxKm, countryCode, osmTag);
+  } catch (e) {
+    // Alle Kartendienste down: lieber die alten Filialen als gar keine
+    if (hit?.branches.length) {
+      console.log(`Filialsuche für ${name} ausgefallen - nehme Filialen von vor ${Math.round((Date.now() - hit.time) / 3600000)} h`);
+      return { branches: hit.branches, cached: true };
+    }
+    throw e;
+  }
   // Leeres Ergebnis nur kurz merken: sonst fehlt eine Kette nach einem
   // einzigen Fehlgriff einen ganzen Tag lang (so ging Netto verloren).
   storeCache.set(k, { time: branches.length ? Date.now() : Date.now() - STORE_CACHE_MS + EMPTY_STORE_CACHE_MS, branches });
@@ -1174,20 +1184,22 @@ function radiusFrom(req) {
  * Letzter Filter vor der Antwort (läuft auch auf Cache-Treffern):
  *  - nur Filialen im Umkreis radiusKm (Standard 25 km, max. 100 km)
  *  - Angebote ohne Eurobetrag (nur Prozent-Rabatt) nur mit ?includePromo=1
- *  - Angebote mit unklarer Packungsgröße nur mit ?includeUnclear=1
- *  - Angebote ohne gefundene Filiale (lat/lon null, mit "note") nur mit
- *    ?includeUnlocated=1 - ältere App-Versionen erwarten immer Koordinaten.
- * Der tägliche Check (daily=1) bekommt alles, damit die Mail nichts verliert.
+ *  - Angebote mit unklarer Packungsgröße nur, wenn der Preis nach einer
+ *    Einzeldose aussieht (bis 3 €), sonst nur mit ?includeUnclear=1 -
+ *    so fehlt z. B. Netto für 0,88 € nicht mehr, ein 8,88-€-Pack schon
+ *  - Angebote, deren Filialsuche ausgefallen ist (lat/lon null, mit "note"),
+ *    nur im täglichen Check (daily=1) - die App braucht immer Koordinaten
  */
+const MAX_SINGLE_CAN_PRICE = 3;
 function forClient(offers, req, lat, lon) {
   const radiusKm = radiusFrom(req);
   const daily = req.query.daily === "1";
   return offers.filter((o) => {
     if (o.lat == null) {
-      if (!daily && req.query.includeUnlocated !== "1") return false;
+      if (!daily) return false;
     } else if (haversineKm(lat, lon, o.lat, o.lon) > radiusKm) return false;
     if (o.price == null && req.query.includePromo !== "1") return false;
-    if (o.packInfo === "Nicht eindeutig erkennbar" && !daily && req.query.includeUnclear !== "1") return false;
+    if (o.packInfo === "Nicht eindeutig erkennbar" && !(o.price <= MAX_SINGLE_CAN_PRICE) && req.query.includeUnclear !== "1") return false;
     return true;
   });
 }
@@ -1317,10 +1329,7 @@ app.get("/offers", async (req, res) => {
           const osmTag = cfg.storeOsmTag || (searchName !== o.storeName || searchName.replace(/[^A-Za-z]/g, "").length <= 4 ? "shop" : "");
           const res = await geocodeStoresCached(searchName, lat, lon, 3, 100, country, osmTag);
           branches = res.branches;
-          if (!branches.length) {
-            console.log(`Filialsuche: keine Filiale für ${o.storeName} (gesucht: ${searchName})`);
-            failReason.set(o.storeName, "Keine Filiale in der Kartensuche gefunden - Filialen im Umkreis nicht geprüft");
-          }
+          if (!branches.length) console.log(`Filialsuche: keine Filiale für ${o.storeName} (gesucht: ${searchName})`);
           // Photon erlaubt etwa 1 Anfrage pro Sekunde - nur nach echten Anfragen warten
           if (!res.cached) await new Promise((r) => setTimeout(r, 1100));
         } catch (e) {
@@ -1347,11 +1356,14 @@ app.get("/offers", async (req, res) => {
       // Kette aus dem Nordosten). Nur Filialen im Verbreitungsgebiet zulassen.
       const regionKey = Object.keys(REGIONAL_CHAINS).find((k) => normText(o.storeName).replace(/[^a-z0-9]/g, "").startsWith(k));
       if (regionKey) usable = usable.filter((b) => REGIONAL_CHAINS[regionKey].includes(b.state));
-      // Keine Filiale gefunden: Angebot trotzdem zeigen, nur ohne Adresse.
-      // Regionale Ketten und Scottie-Netto nicht - die gibt es in den meisten
-      // Gegenden gar nicht, und ohne Filiale lässt sich das nicht prüfen.
+      // Filialsuche ausgefallen/übersprungen: Angebot für die Tagesmail
+      // trotzdem merken, nur ohne Adresse (forClient gibt es nicht an die App).
+      // Hat die Suche geklappt und nichts gefunden, gibt es die Kette hier
+      // nicht - dann weglassen (vorher landeten so CITTI, Wasgau & Co. aus
+      // anderen Regionen in der Marburg-Mail). Regionale Ketten und
+      // Scottie-Netto ohne Filiale ebenfalls nicht.
       if (!usable.length) {
-        if (!regionKey && !isScottieNetto) {
+        if (failReason.has(o.storeName) && !regionKey && !isScottieNetto) {
           offers.push({
             id: `${key}-${i}-nofiliale`,
             ...o,
@@ -1359,7 +1371,7 @@ app.get("/offers", async (req, res) => {
             storeAddress: "",
             lat: null,
             lon: null,
-            note: failReason.get(o.storeName) || "Keine passende Filiale gefunden - Filialen im Umkreis nicht geprüft"
+            note: failReason.get(o.storeName)
           });
         }
         continue;

@@ -45,9 +45,6 @@ class OfferRepository(
             parameter("lon", lon)
             parameter("radiusKm", radiusKm)
             parameter("q", query)
-            // Auch Angebote ohne gefundene Filiale und mit unklarer Packung
-            parameter("includeUnlocated", 1)
-            parameter("includeUnclear", 1)
         }.body()
     }
 

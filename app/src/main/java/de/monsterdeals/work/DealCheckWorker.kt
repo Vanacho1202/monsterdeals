@@ -23,13 +23,12 @@ class DealCheckWorker(
     override suspend fun doWork(): Result {
         val here = LastLocation.get(applicationContext) ?: return Result.success()
         return try {
-            // Nur Angebote mit gefundener Filiale melden
-            val offers = repo.nearbyOffers(here.lat, here.lon).filter { it.lat != null }
+            val offers = repo.nearbyOffers(here.lat, here.lon)
             val alreadyNotified = NotifiedOffers.getAll(applicationContext)
             val newOffers = offers.filter { it.id !in alreadyNotified }
 
             for (offer in newOffers) {
-                val distance = offer.distanceKm(here.lat, here.lon) ?: continue
+                val distance = offer.distanceKm(here.lat, here.lon)
                 Notifications.showDeal(applicationContext, offer, distance)
             }
             NotifiedOffers.addAll(applicationContext, offers.map { it.id })

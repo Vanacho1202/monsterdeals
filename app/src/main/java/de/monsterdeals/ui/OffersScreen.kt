@@ -219,7 +219,7 @@ private fun OfferCard(offer: Offer, here: LatLon) {
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    if (distance != null) InfoChip(String.format("%.1f km", distance))
+                    InfoChip(String.format("%.1f km", distance))
                     offer.savingsPercent?.let {
                         InfoChip(
                             "-$it %",
@@ -233,7 +233,7 @@ private fun OfferCard(offer: Offer, here: LatLon) {
                 }
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    offer.storeAddress.ifBlank { offer.note ?: "Filialen im Umkreis nicht geprüft" },
+                    offer.storeAddress,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

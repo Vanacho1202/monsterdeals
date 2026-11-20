@@ -63,12 +63,9 @@ class OffersViewModel(app: Application) : AndroidViewModel(app) {
                 // Filiale landete vor einer nahen, minimal teureren. Deshalb
                 // Preis und Entfernung kombiniert gewichten (2 Cent "Strafe"
                 // pro Kilometer) statt rein nach Preis zu sortieren.
-                // Angebote ohne gefundene Filiale ans Ende (nach Preis).
-                val sorted = offers.sortedWith(
-                    compareBy<Offer> { it.lat == null }.thenBy { offer ->
-                        offer.price + (offer.distanceKm(here.lat, here.lon) ?: 0.0) * 0.02
-                    }
-                )
+                val sorted = offers.sortedBy { offer ->
+                    offer.price + offer.distanceKm(here.lat, here.lon) * 0.02
+                }
                 _state.value = UiState.Ready(sorted, here)
             } catch (e: Exception) {
                 _state.value = UiState.Error("Angebote konnten nicht geladen werden: ${e.message}")
