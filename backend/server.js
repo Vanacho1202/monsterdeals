@@ -1175,13 +1175,19 @@ function radiusFrom(req) {
  *  - nur Filialen im Umkreis radiusKm (Standard 25 km, max. 100 km)
  *  - Angebote ohne Eurobetrag (nur Prozent-Rabatt) nur mit ?includePromo=1
  *  - Angebote mit unklarer Packungsgröße nur mit ?includeUnclear=1
+ *  - Angebote ohne gefundene Filiale (lat/lon null, mit "note") nur mit
+ *    ?includeUnlocated=1 - ältere App-Versionen erwarten immer Koordinaten.
+ * Der tägliche Check (daily=1) bekommt alles, damit die Mail nichts verliert.
  */
 function forClient(offers, req, lat, lon) {
   const radiusKm = radiusFrom(req);
+  const daily = req.query.daily === "1";
   return offers.filter((o) => {
-    if (haversineKm(lat, lon, o.lat, o.lon) > radiusKm) return false;
+    if (o.lat == null) {
+      if (!daily && req.query.includeUnlocated !== "1") return false;
+    } else if (haversineKm(lat, lon, o.lat, o.lon) > radiusKm) return false;
     if (o.price == null && req.query.includePromo !== "1") return false;
-    if (o.packInfo === "Nicht eindeutig erkennbar" && req.query.includeUnclear !== "1") return false;
+    if (o.packInfo === "Nicht eindeutig erkennbar" && !daily && req.query.includeUnclear !== "1") return false;
     return true;
   });
 }
@@ -1215,28 +1221,12 @@ const MAX_GEOCODED_STORES = 30;
  */
 const DAILY_URL_PATH = "/offers?lat=50.80&lon=8.77&radiusKm=25&q=Monster+Energy&daily=1";
 
-function logDaily(result, lat, lon, rawIfGeocodeFailed = null) {
-  // Gleiche Kette + Produkt + Preis zusammenfassen, max. 3 Adressen je Angebot
+function logDaily(result, lat, lon) {
+  // Gleiche Kette + Produkt + Preis zusammenfassen, max. 3 Adressen je Angebot.
+  // Angebote ohne gefundene Filiale (lat null) kommen mit "note" mit.
   const groups = new Map();
-  // Ist die Filialsuche (Photon) ausgefallen, die Angebote trotzdem melden -
-  // nur eben ohne Adressen, statt eine leere Liste zu schicken.
-  if (rawIfGeocodeFailed) {
-    for (const o of rawIfGeocodeFailed) {
-      if (o.price == null) continue;
-      // Regionale Ketten lassen sich ohne Filialsuche nicht prüfen - weglassen,
-      // sonst stehen Ketten aus Nord-/Ostdeutschland in der Marburg-Mail.
-      const nk = normText(o.storeName).replace(/[^a-z0-9]/g, "");
-      if (Object.keys(REGIONAL_CHAINS).some((k) => nk.startsWith(k))) continue;
-      if (/^netto\b/i.test(o.storeName) && !/marken/i.test(o.storeName)) continue;
-      const k = `${o.storeName}|${o.product}|${o.price}`;
-      if (!groups.has(k)) groups.set(k, { store: o.storeName, product: o.product, price: o.price, deposit: o.deposit,
-        regularPrice: o.regularPrice, validUntil: o.validUntil, packInfo: o.packInfo, branches: [],
-        note: "Filialsuche ausgefallen - Filialen im Umkreis nicht geprüft" });
-    }
-  }
   for (const o of result) {
     const k = `${o.storeName}|${o.product}|${o.price}`;
-    const d = Math.round(haversineKm(lat, lon, o.lat, o.lon) * 10) / 10;
     let g = groups.get(k);
     if (!g) {
       g = { store: o.storeName, product: o.product, price: o.price, deposit: o.deposit,
@@ -1244,7 +1234,12 @@ function logDaily(result, lat, lon, rawIfGeocodeFailed = null) {
             ...(o.condition ? { condition: o.condition } : {}) };
       groups.set(k, g);
     }
+    if (o.lat == null) {
+      if (!g.branches.length) g.note = o.note;
+      continue;
+    }
     delete g.note;
+    const d = Math.round(haversineKm(lat, lon, o.lat, o.lon) * 10) / 10;
     if (g.branches.length < 3) g.branches.push(`${o.storeAddress} (${d} km)`);
   }
   const list = [...groups.values()].sort((a, b) => (a.price ?? 99) - (b.price ?? 99));
@@ -1306,10 +1301,15 @@ app.get("/offers", async (req, res) => {
     // Netto (0,88 €, aus discounto.de) fiel hinten still heraus.
     raw.sort((a, b) => (a.price ?? 99) - (b.price ?? 99));
     const skipped = new Set();
+    // Warum eine Kette keine Filiale hat - steht dann als "note" am Angebot
+    const failReason = new Map();
     for (const [i, o] of raw.entries()) {
       let branches = branchMemo.get(o.storeName);
-      if (!branches) {
-        if (branchMemo.size >= MAX_GEOCODED_STORES) { skipped.add(o.storeName); continue; }
+      if (!branches && branchMemo.size >= MAX_GEOCODED_STORES) {
+        skipped.add(o.storeName);
+        failReason.set(o.storeName, "Filialsuche übersprungen (Limit) - Filialen im Umkreis nicht geprüft");
+        branches = [];
+      } else if (!branches) {
         try {
           // Kurze Namen wie "HIT" oder "K+K" nur unter Läden suchen, sonst
           // treffen sie Orte/Straßen.
@@ -1317,13 +1317,17 @@ app.get("/offers", async (req, res) => {
           const osmTag = cfg.storeOsmTag || (searchName !== o.storeName || searchName.replace(/[^A-Za-z]/g, "").length <= 4 ? "shop" : "");
           const res = await geocodeStoresCached(searchName, lat, lon, 3, 100, country, osmTag);
           branches = res.branches;
-          if (!branches.length) console.log(`Filialsuche: keine Filiale für ${o.storeName} (gesucht: ${searchName})`);
+          if (!branches.length) {
+            console.log(`Filialsuche: keine Filiale für ${o.storeName} (gesucht: ${searchName})`);
+            failReason.set(o.storeName, "Keine Filiale in der Kartensuche gefunden - Filialen im Umkreis nicht geprüft");
+          }
           // Photon erlaubt etwa 1 Anfrage pro Sekunde - nur nach echten Anfragen warten
           if (!res.cached) await new Promise((r) => setTimeout(r, 1100));
         } catch (e) {
           console.error(`geocodeStores(${o.storeName}) failed:`, e?.message || e);
           branches = [];
           geocodeFailed = true;
+          failReason.set(o.storeName, "Filialsuche ausgefallen - Filialen im Umkreis nicht geprüft");
         }
         branchMemo.set(o.storeName, branches);
       }
@@ -1343,6 +1347,23 @@ app.get("/offers", async (req, res) => {
       // Kette aus dem Nordosten). Nur Filialen im Verbreitungsgebiet zulassen.
       const regionKey = Object.keys(REGIONAL_CHAINS).find((k) => normText(o.storeName).replace(/[^a-z0-9]/g, "").startsWith(k));
       if (regionKey) usable = usable.filter((b) => REGIONAL_CHAINS[regionKey].includes(b.state));
+      // Keine Filiale gefunden: Angebot trotzdem zeigen, nur ohne Adresse.
+      // Regionale Ketten und Scottie-Netto nicht - die gibt es in den meisten
+      // Gegenden gar nicht, und ohne Filiale lässt sich das nicht prüfen.
+      if (!usable.length) {
+        if (!regionKey && !isScottieNetto) {
+          offers.push({
+            id: `${key}-${i}-nofiliale`,
+            ...o,
+            currency: o.currency || "EUR",
+            storeAddress: "",
+            lat: null,
+            lon: null,
+            note: failReason.get(o.storeName) || "Keine passende Filiale gefunden - Filialen im Umkreis nicht geprüft"
+          });
+        }
+        continue;
+      }
       usable.forEach((geo, j) => {
         // currency-Fallback für die älteren DE/IT-Scraper, die das Feld noch
         // nicht selbst setzen (die waren immer EUR, nie etwas anderes).
@@ -1370,7 +1391,7 @@ app.get("/offers", async (req, res) => {
     // nächsten Aufruf neu versuchen (gefundene Filialen sind ohnehin gecacht).
     if (!geocodeFailed && settled.some((r) => r.status === "fulfilled")) cache.set(key, { time: Date.now(), offers });
     const result = forClient(offers, req, lat, lon);
-    if (req.query.daily === "1") logDaily(result, lat, lon, geocodeFailed ? raw : null);
+    if (req.query.daily === "1") logDaily(result, lat, lon);
     res.json(result);
   } catch (e) {
     console.error(e);

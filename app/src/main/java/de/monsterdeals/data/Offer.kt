@@ -15,14 +15,19 @@ data class Offer(
     val deposit: Double = 0.0,   // Pfand in derselben Währung, separat an der Kasse fällig
     val regularPrice: Double?,   // Normalpreis, falls bekannt
     val validUntil: String,      // ISO-Datum
-    val lat: Double,
-    val lon: Double,
+    // null = Filiale nicht gefunden (Backend mit includeUnlocated=1),
+    // dann steht der Grund in "note"
+    val lat: Double? = null,
+    val lon: Double? = null,
+    val note: String? = null,
     val currency: String = "EUR", // ISO-Code, z.B. "EUR"/"PLN"/"CZK"/"HUF"/"DKK"/"SEK" -
                                    // nicht jedes Land in der App nutzt Euro, nie annehmen
     val source: String = ""   // Fundstelle im Web, Angabe ohne Gewähr
 ) {
-    /** Entfernung in km zum übergebenen Punkt (Haversine). */
-    fun distanceKm(fromLat: Double, fromLon: Double): Double {
+    /** Entfernung in km zum übergebenen Punkt (Haversine), null ohne Filiale. */
+    fun distanceKm(fromLat: Double, fromLon: Double): Double? {
+        val lat = lat ?: return null
+        val lon = lon ?: return null
         val r = 6371.0
         val dLat = Math.toRadians(lat - fromLat)
         val dLon = Math.toRadians(lon - fromLon)
